@@ -136,7 +136,6 @@ jobs:
   # ========================================
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
-  # (This job is unchanged, as it should scan all code, not just the delta)
   validate_code:
     name: 1. Validate Code (Prettier & PMD)
     runs-on: ubuntu-latest
@@ -175,23 +174,22 @@ jobs:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
     
-    outputs: # <-- MODIFICATION: To signal if a delta exists
-      delta_exists: ${{ steps.check_delta.outputs.delta_exists }}
+    outputs:
+      delta_exists: ${{ steps.find_files.outputs.delta_exists }}
 
     steps:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # <-- MODIFICATION: Required for git diff to see previous commits
+          fetch-depth: 0 # Required for git diff to see previous commits
 
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
 
       - name: Force-update Salesforce CLI
         run: sf update
-
-      - name: Install sfdx-git-delta plugin # <-- MODIFICATION
-        run: sf plugins:install sfdx-git-delta
+      
+      # <-- MODIFICATION: Removed sfdx-git-delta install step
 
       - name: Authenticate to Sandbox
         id: auth_sandbox
@@ -201,36 +199,52 @@ jobs:
           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Generate Delta Package # <-- MODIFICATION
+      - name: Find changed metadata files # <-- MODIFICATION
+        id: find_files
         run: |
-          echo "Generating delta from HEAD~1 to HEAD"
-          sfdx sgd:source:delta --to HEAD --from HEAD~1 --output ./delta-output
+          echo "Finding changes between HEAD~1 and HEAD"
+          git diff --name-only HEAD~1 HEAD > changed-files.txt
           
-      - name: Check if delta package exists # <-- MODIFICATION
-        id: check_delta
-        run: |
-          if [ -f "delta-output/package.xml" ]; then
-            echo "Delta package.xml found. Changes will be validated."
+          echo "--- All changed files ---"
+          cat changed-files.txt
+          echo "-------------------------"
+
+          # Filter for files in force-app OR force-app2 OR the project file
+          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          
+          echo "--- Salesforce changes ---"
+          cat salesforce-changes.txt
+          echo "--------------------------"
+
+          if [ -s salesforce-changes.txt ]; then
+            echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "No metadata changes found in commit. Skipping validation."
+            echo "No Salesforce metadata changes detected. Skipping validation."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
-
-      - name: Upload Delta Artifact # <-- MODIFICATION
-        if: steps.check_delta.outputs.delta_exists == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: delta-package
-          path: delta-output/ # Upload the contents of the delta-output directory
+      
+      # <-- MODIFICATION: Removed artifact upload step
 
       - name: Validate Delta against Sandbox # <-- MODIFICATION
-        if: steps.check_delta.outputs.delta_exists == 'true'
+        if: steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "Validating delta changes..."
-          cd delta-output
+          
+          # Build the --source-path arguments from the file list
+          # xargs reads each line from the file and prepends '-p' (short for --source-path)
+          # The output is a single line: -p path/one -p path/two
+          SOURCE_PATHS=$(xargs -a salesforce-changes.txt -I {} echo -p {})
+          
+          if [ -z "$SOURCE_PATHS" ]; then
+            echo "No paths to validate."
+            exit 0
+          fi
+          
+          echo "Validating paths: $SOURCE_PATHS"
+          
           sf project deploy validate \
-            --manifest package.xml \
+            $SOURCE_PATHS \
             --target-org SandboxOrg \
             --test-level RunLocalTests \
             --wait 60 \
@@ -242,9 +256,8 @@ jobs:
   deploy_production:
     name: 3. Deploy to Production
     runs-on: ubuntu-latest
-    needs: validate_sandbox # Depends on the validation job
+    needs: validate_sandbox
     
-    # <-- MODIFICATION: Only run this job if the validation job found changes
     if: needs.validate_sandbox.outputs.delta_exists == 'true'
 
     environment:
@@ -252,7 +265,11 @@ jobs:
       url: ${{ steps.auth_prod.outputs.org_url }}
 
     steps:
-      # We don't need to check out code, we'll use the artifact
+      - name: Check out code # <-- MODIFICATION: Need to checkout again to run git diff
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
 
@@ -267,18 +284,33 @@ jobs:
           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Download Delta Artifact # <-- MODIFICATION
-        uses: actions/download-artifact@v4
-        with:
-          name: delta-package
-          path: delta-output # Download and re-create the delta-output directory
-          
+      # <-- MODIFICATION: Removed artifact download
+      
+      - name: Find changed metadata files for Prod # <-- MODIFICATION
+        id: find_files_prod
+        run: |
+          echo "Finding changes between HEAD~1 and HEAD for Prod deployment"
+          git diff --name-only HEAD~1 HEAD > changed-files-prod.txt
+          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files-prod.txt > salesforce-changes-prod.txt || true
+          echo "--- Salesforce changes to deploy ---"
+          cat salesforce-changes-prod.txt
+          echo "------------------------------------"
+
       - name: Deploy Delta to Production # <-- MODIFICATION
         run: |
           echo "Deploying delta changes to Production..."
-          cd delta-output
+          
+          SOURCE_PATHS=$(xargs -a salesforce-changes-prod.txt -I {} echo -p {})
+          
+          if [ -z "$SOURCE_PATHS" ]; then
+            echo "No paths to deploy."
+            exit 0
+          fi
+
+          echo "Deploying paths: $SOURCE_PATHS"
+          
           sf project deploy start \
-            --manifest package.xml \
+            $SOURCE_PATHS \
             --target-org ProdOrg \
             --test-level RunLocalTests \
             --wait 60 \
