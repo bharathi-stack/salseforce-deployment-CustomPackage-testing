@@ -26,20 +26,25 @@
 #       - name: Install Salesforce CLI
 #         uses: sfdx-actions/setup-sfdx@v1
 
+#       # --- ADDED FIX ---
+#       # Force-update the CLI to repair any missing internal files
+#       - name: Force-update Salesforce CLI
+#         run: sf update
+#       # --- END OF FIX ---
+
 #       - name: Run Prettier code format check
 #         run: npm run prettier:check
 #       - name: Run PMD code scan
 #         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
 #   # ========================================
-#   # 2. SECOND JOB: Sandbox Deployment
+#   # 2. SECOND JOB: Sandbox Validation
 #   # ========================================
-#   deploy_sandbox:
-#     name: 2. Deploy to Sandbox
+#   validate_sandbox:
+#     name: 2. Validate against Sandbox
 #     runs-on: ubuntu-latest
 #     needs: validate_code
 
-#     # This 'environment' block enables the manual approval gate
 #     environment:
 #       name: sandbox
 #       url: ${{ steps.auth_sandbox.outputs.org_url }}
@@ -51,30 +56,29 @@
 #       - name: Install Salesforce CLI
 #         uses: sfdx-actions/setup-sfdx@v1
 
+#       # --- ADDED FIX ---
+#       # Force-update the CLI to repair any missing internal files
+#       - name: Force-update Salesforce CLI
+#         run: sf update
+#       # --- END OF FIX ---
+
 #       - name: Authenticate to Sandbox
 #         id: auth_sandbox
 #         run: |
-#           # Use the secret to create a temp auth file
 #           echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
-#           # Authenticate and set alias
 #           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
-#           # Get the org URL for the environment link
 #           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
 #           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-#       # Name changed to "Deploy"
-#       - name: Deploy to Sandbox (RunLocalTests)
+#       - name: Validate against Sandbox (RunLocalTests)
 #         run: |
-#           sfdx force:source:deploy --sourcepath force-app,force-app2 \
-#                                   --targetusername SandboxOrg \
-#                                   --testlevel RunLocalTests \
-#                                   --wait 60 \
-#                                   --verbose
-#           # --- FIX ---
-#           # The --checkonly flag has been removed.
-#           # This will now perform a REAL deployment to the sandbox.
-#           # If tests fail, this job will fail and block production.
-#           # --- END FIX ---
+#           sf project deploy validate \
+#             --source-dir force-app \
+#             --source-dir force-app2 \
+#             --target-org SandboxOrg \
+#             --test-level RunLocalTests \
+#             --wait 60 \
+#             --verbose
 
 #   # ========================================
 #   # 3. THIRD JOB: Production Deployment
@@ -82,9 +86,8 @@
 #   deploy_production:
 #     name: 3. Deploy to Production
 #     runs-on: ubuntu-latest
-#     needs: deploy_sandbox
+#     needs: validate_sandbox
 
-#     # This 'environment' block enables the final manual approval
 #     environment:
 #       name: production
 #       url: ${{ steps.auth_prod.outputs.org_url }}
@@ -96,6 +99,12 @@
 #       - name: Install Salesforce CLI
 #         uses: sfdx-actions/setup-sfdx@v1
 
+#       # --- ADDED FIX ---
+#       # Force-update the CLI to repair any missing internal files
+#       - name: Force-update Salesforce CLI
+#         run: sf update
+#       # --- END OF FIX ---
+
 #       - name: Authenticate to Production
 #         id: auth_prod
 #         run: |
@@ -106,10 +115,16 @@
 
 #       - name: Deploy to Production (RunLocalTests)
 #         run: |
-#           sfdx force:source:deploy --sourcepath force-app,force-app2 \
-#                                   --targetusername ProdOrg \
-#                                   --testlevel RunLocalTests
-#           # This is the final, real deployment.
+#           sf project deploy start \
+#             --source-dir force-app \
+#             --source-dir force-app2 \
+#             --target-org ProdOrg \
+#             --test-level RunLocalTests \
+#             --wait 60 \
+#             --verbose
+
+
+
 
 name: Salesforce CI/CD Pipeline
 on:
@@ -121,6 +136,7 @@ jobs:
   # ========================================
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
+  # (This job is unchanged, as it should scan all code, not just the delta)
   validate_code:
     name: 1. Validate Code (Prettier & PMD)
     runs-on: ubuntu-latest
@@ -139,11 +155,8 @@ jobs:
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
 
-      # --- ADDED FIX ---
-      # Force-update the CLI to repair any missing internal files
       - name: Force-update Salesforce CLI
         run: sf update
-      # --- END OF FIX ---
 
       - name: Run Prettier code format check
         run: npm run prettier:check
@@ -151,29 +164,34 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
   # ========================================
-  # 2. SECOND JOB: Sandbox Validation
+  # 2. SECOND JOB: Generate Delta & Validate
   # ========================================
   validate_sandbox:
-    name: 2. Validate against Sandbox
+    name: 2. Generate Delta & Validate
     runs-on: ubuntu-latest
     needs: validate_code
 
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
+    
+    outputs: # <-- MODIFICATION: To signal if a delta exists
+      delta_exists: ${{ steps.check_delta.outputs.delta_exists }}
 
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # <-- MODIFICATION: Required for git diff to see previous commits
 
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
 
-      # --- ADDED FIX ---
-      # Force-update the CLI to repair any missing internal files
       - name: Force-update Salesforce CLI
         run: sf update
-      # --- END OF FIX ---
+
+      - name: Install sfdx-git-delta plugin # <-- MODIFICATION
+        run: sf plugins:install sfdx-git-delta
 
       - name: Authenticate to Sandbox
         id: auth_sandbox
@@ -183,11 +201,36 @@ jobs:
           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Validate against Sandbox (RunLocalTests)
+      - name: Generate Delta Package # <-- MODIFICATION
         run: |
+          echo "Generating delta from HEAD~1 to HEAD"
+          sfdx sgd:source:delta --to HEAD --from HEAD~1 --output ./delta-output
+          
+      - name: Check if delta package exists # <-- MODIFICATION
+        id: check_delta
+        run: |
+          if [ -f "delta-output/package.xml" ]; then
+            echo "Delta package.xml found. Changes will be validated."
+            echo "delta_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No metadata changes found in commit. Skipping validation."
+            echo "delta_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Delta Artifact # <-- MODIFICATION
+        if: steps.check_delta.outputs.delta_exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-package
+          path: delta-output/ # Upload the contents of the delta-output directory
+
+      - name: Validate Delta against Sandbox # <-- MODIFICATION
+        if: steps.check_delta.outputs.delta_exists == 'true'
+        run: |
+          echo "Validating delta changes..."
+          cd delta-output
           sf project deploy validate \
-            --source-dir force-app \
-            --source-dir force-app2 \
+            --manifest package.xml \
             --target-org SandboxOrg \
             --test-level RunLocalTests \
             --wait 60 \
@@ -199,24 +242,22 @@ jobs:
   deploy_production:
     name: 3. Deploy to Production
     runs-on: ubuntu-latest
-    needs: validate_sandbox
+    needs: validate_sandbox # Depends on the validation job
+    
+    # <-- MODIFICATION: Only run this job if the validation job found changes
+    if: needs.validate_sandbox.outputs.delta_exists == 'true'
 
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
 
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
+      # We don't need to check out code, we'll use the artifact
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
 
-      # --- ADDED FIX ---
-      # Force-update the CLI to repair any missing internal files
       - name: Force-update Salesforce CLI
         run: sf update
-      # --- END OF FIX ---
 
       - name: Authenticate to Production
         id: auth_prod
@@ -226,11 +267,18 @@ jobs:
           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Deploy to Production (RunLocalTests)
+      - name: Download Delta Artifact # <-- MODIFICATION
+        uses: actions/download-artifact@v4
+        with:
+          name: delta-package
+          path: delta-output # Download and re-create the delta-output directory
+          
+      - name: Deploy Delta to Production # <-- MODIFICATION
         run: |
+          echo "Deploying delta changes to Production..."
+          cd delta-output
           sf project deploy start \
-            --source-dir force-app \
-            --source-dir force-app2 \
+            --manifest package.xml \
             --target-org ProdOrg \
             --test-level RunLocalTests \
             --wait 60 \
