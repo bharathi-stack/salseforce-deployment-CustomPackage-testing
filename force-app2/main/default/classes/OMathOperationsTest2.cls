@@ -2,17 +2,29 @@
 private class OMathOperationsTest2 {
   @isTest
   static void testMulFiveAndFive() {
-    // 1. Call the method
     Test.startTest();
     Integer actualResult = OMathOperations2.mulFiveAndFive();
     Test.stopTest();
 
-    // 2. Verify the result
-    Integer expectedResult = 5;
+    Integer expectedResult = 25;
     System.assertEquals(
       expectedResult,
       actualResult,
       'The multiply method should have returned 25.'
     );
   }
+
+  // @isTest
+  // static void testAddFiveAndFive() {
+  //   Test.startTest();
+  //   Integer actualResult = OMathOperations2.addFiveAndFive();
+  //   Test.stopTest();
+
+  //   Integer expectedResult = 10;
+  //   System.assertEquals(
+  //     expectedResult,
+  //     actualResult,
+  //     'The addition method should have returned 10.'
+  //   );
+  // }
 }
