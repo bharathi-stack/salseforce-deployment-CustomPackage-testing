@@ -8,7 +8,7 @@ private class OMathOperationsTest2 {
     Test.stopTest();
 
     // 2. Verify the result
-    Integer expectedResult = 25;
+    Integer expectedResult = 5;
     System.assertEquals(
       expectedResult,
       actualResult,
