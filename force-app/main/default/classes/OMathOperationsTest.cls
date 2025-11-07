@@ -1,6 +1,5 @@
 @isTest
 private class OMathOperationsTest {
-
   @isTest
   static void testAddFiveAndFive() {
     // 1. Call the method.
