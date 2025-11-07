@@ -1,0 +1,115 @@
+name: Salesforce CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  # ========================================
+  # 1. FIRST JOB: Initial Process (Validate Code)
+  # ========================================
+  validate_code:
+    name: 1. Validate Code (Prettier & PMD)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm dependencies
+        # Assumes prettier and sfdx-scanner are in your package.json
+        run: npm install 
+
+      - name: Install Salesforce CLI
+        uses: sfdx-community/setup-sfdx-cli@v1
+
+      - name: Run Prettier code format check
+        # This command checks formatting without changing files.
+        # If code is poorly formatted, it will fail the job.
+        run: npm run prettier:check
+
+      - name: Run PMD code scan
+        # This command fails the job if any PMD violations are found.
+        run: sfdx scanner:run --target "force-app" --engine "pmd" --violations-cause-build-failure
+
+      # If Prettier or PMD fails, this job fails, and the entire pipeline stops here.
+
+  # ========================================
+  # 2. SECOND JOB: Sandbox Deployment (Validate)
+  # ========================================
+  deploy_sandbox:
+    name: 2. Deploy to Sandbox (Validate)
+    runs-on: ubuntu-latest
+    needs: validate_code # Depends on the 'validate_code' job succeeding
+    
+    # This 'environment' block enables the manual approval gate
+    environment:
+      name: sandbox
+      url: ${{ steps.auth_sandbox.outputs.org_url }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install Salesforce CLI
+        uses: sfdx-community/setup-sfdx-cli@v1
+
+      - name: Authenticate to Sandbox
+        id: auth_sandbox
+        run: |
+          # Use the secret to create a temp auth file
+          echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
+          # Authenticate and set alias
+          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
+          # Get the org URL for the environment link
+          org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "org_url=$org_url" >> $GITHUB_OUTPUT
+
+      - name: Validate Sandbox Deployment (RunLocalTests)
+        run: |
+          sfdx force:source:deploy --sourcepath force-app \
+                                  --targetusername SandboxOrg \
+                                  --testlevel RunLocalTests \
+                                  --checkonly # <-- --checkonly validates without deploying
+
+      # If --testlevel RunLocalTests fails, this job fails and blocks production.
+
+  # ========================================
+  # 3. THIRD JOB: Production Deployment
+  # ========================================
+  deploy_production:
+    name: 3. Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy_sandbox # Depends on the 'deploy_sandbox' job succeeding
+
+    # This 'environment' block enables the final manual approval
+    environment:
+      name: production
+      url: ${{ steps.auth_prod.outputs.org_url }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install Salesforce CLI
+        uses: sfdx-community/setup-sfdx-cli@v1
+
+      - name: Authenticate to Production
+        id: auth_prod
+        run: |
+          echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > sfdx_auth_file.txt
+          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
+          org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "org_url=$org_url" >> $GITHUB_OUTPUT
+
+      - name: Deploy to Production (RunLocalTests)
+        run: |
+          sfdx force:source:deploy --sourcepath force-app \
+                                  --targetusername ProdOrg \
+                                  --testlevel RunLocalTests
+          # No --checkonly. This is the final, real deployment.
