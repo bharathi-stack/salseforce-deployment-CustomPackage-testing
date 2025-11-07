@@ -1,5 +1,6 @@
 name: Salesforce CI/CD Pipeline
 
+# Trigger only on push to 'dev' branch
 on:
   push:
     branches:
@@ -26,9 +27,8 @@ jobs:
         run: npm install 
 
       - name: Install Salesforce CLI
-        # --- THIS IS THE FIX ---
-        uses: salesforce/setup-sf-cli@v2
-        # --- END OF FIX ---
+        # Using the sfdx-actions/setup-sfdx@v1 action
+        uses: sfdx-actions/setup-sfdx@v1
 
       - name: Run Prettier code format check
         # This command checks formatting without changing files.
@@ -37,7 +37,6 @@ jobs:
 
       - name: Run PMD code scan
         # This command fails the job if any PMD violations are found.
-        # Note: The 'sf' CLI can run sfdx commands
         run: sfdx scanner:run --target "force-app" --engine "pmd" --violations-cause-build-failure
 
       # If Prettier or PMD fails, this job fails, and the entire pipeline stops here.
@@ -60,9 +59,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Salesforce CLI
-        # --- THIS IS THE FIX ---
-        uses: salesforce/setup-sf-cli@v2
-        # --- END OF FIX ---
+        uses: sfdx-actions/setup-sfdx@v1
 
       - name: Authenticate to Sandbox
         id: auth_sandbox
@@ -102,9 +99,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Salesforce CLI
-        # --- THIS IS THE FIX ---
-        uses: salesforce/setup-sf-cli@v2
-        # --- END OF FIX ---
+        uses: sfdx-actions/setup-sfdx@v1
 
       - name: Authenticate to Production
         id: auth_prod
