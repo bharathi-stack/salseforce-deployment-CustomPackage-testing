@@ -139,21 +139,16 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install npm dependencies
         run: npm install
-
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
-
       - name: Force-update Salesforce CLI
         run: sf update
-
       - name: Run Prettier code format check
         run: npm run prettier:check
       - name: Run PMD code scan
@@ -166,28 +161,20 @@ jobs:
     name: 2. Generate Delta & Validate
     runs-on: ubuntu-latest
     needs: validate_code
-
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
-
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
-
     steps:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required for git diff to see previous commits
-
+          fetch-depth: 0
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
-
       - name: Force-update Salesforce CLI
         run: sf update
-
-      # <-- MODIFICATION: Removed sfdx-git-delta install step
-
       - name: Authenticate to Sandbox
         id: auth_sandbox
         run: |
@@ -195,24 +182,18 @@ jobs:
           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
-
-      - name: Find changed metadata files # <-- MODIFICATION
+      - name: Find changed metadata files
         id: find_files
         run: |
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
-
           echo "--- All changed files ---"
           cat changed-files.txt
           echo "-------------------------"
-
-          # Filter for files in force-app OR force-app2 OR the project file
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
-
           echo "--- Salesforce changes ---"
           cat salesforce-changes.txt
           echo "--------------------------"
-
           if [ -s salesforce-changes.txt ]; then
             echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
@@ -221,17 +202,13 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      # <-- MODIFICATION: Removed artifact upload step
-
       - name: Validate Delta against Sandbox # <-- MODIFICATION
         if: steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "Validating delta changes..."
 
-          # Build the --source-path arguments from the file list
-          # xargs reads each line from the file and prepends '-p' (short for --source-path)
-          # The output is a single line: -p path/one -p path/two
-          SOURCE_PATHS=$(xargs -a salesforce-changes.txt -I {} echo -p {})
+          # Read file, add ' -p ' to the start of each line, then replace newlines with spaces
+          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -p _' | tr '\n' ' ')
 
           if [ -z "$SOURCE_PATHS" ]; then
             echo "No paths to validate."
@@ -240,6 +217,7 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
+          # Unquoted $SOURCE_PATHS is intentional. We want the shell to split it by spaces.
           sf project deploy validate \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
@@ -254,25 +232,19 @@ jobs:
     name: 3. Deploy to Production
     runs-on: ubuntu-latest
     needs: validate_sandbox
-
     if: needs.validate_sandbox.outputs.delta_exists == 'true'
-
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
-
     steps:
-      - name: Check out code # <-- MODIFICATION: Need to checkout again to run git diff
+      - name: Check out code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
-
       - name: Force-update Salesforce CLI
         run: sf update
-
       - name: Authenticate to Production
         id: auth_prod
         run: |
@@ -280,10 +252,7 @@ jobs:
           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
-
-      # <-- MODIFICATION: Removed artifact download
-
-      - name: Find changed metadata files for Prod # <-- MODIFICATION
+      - name: Find changed metadata files for Prod
         id: find_files_prod
         run: |
           echo "Finding changes between HEAD~1 and HEAD for Prod deployment"
@@ -297,7 +266,8 @@ jobs:
         run: |
           echo "Deploying delta changes to Production..."
 
-          SOURCE_PATHS=$(xargs -a salesforce-changes-prod.txt -I {} echo -p {})
+          # Read file, add ' -p ' to the start of each line, then replace newlines with spaces
+          SOURCE_PATHS=$(cat salesforce-changes-prod.txt | sed 's_^_ -p _' | tr '\n' ' ')
 
           if [ -z "$SOURCE_PATHS" ]; then
             echo "No paths to deploy."
@@ -306,6 +276,7 @@ jobs:
 
           echo "Deploying paths: $SOURCE_PATHS"
 
+          # Unquoted $SOURCE_PATHS is intentional.
           sf project deploy start \
             $SOURCE_PATHS \
             --target-org ProdOrg \
