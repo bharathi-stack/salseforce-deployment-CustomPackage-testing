@@ -21,7 +21,7 @@ private class OMathOperationsTest2 {
     Test.stopTest();
 
     Integer expectedResult = 10;
-    System.assertEquals(
+    System.assertEquals
       expectedResult,
       actualResult,
       'The addition method should have returned 10.'
