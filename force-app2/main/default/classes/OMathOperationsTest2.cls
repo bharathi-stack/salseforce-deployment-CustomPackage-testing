@@ -4,7 +4,7 @@ private class OMathOperationsTest2 {
   static void testMulFiveAndFive() {
     // 1. Call the method
     Test.startTest();
-    Integer actualResult = MathOperations.mulFiveAndFive();
+    Integer actualResult = OMathOperations2.mulFiveAndFive();
     Test.stopTest();
 
     // 2. Verify the result

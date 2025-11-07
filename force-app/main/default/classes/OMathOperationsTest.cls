@@ -4,7 +4,7 @@ private class OMathOperationsTest {
   static void testAddFiveAndFive() {
     // 1. Call the method.
     Test.startTest();
-    Integer actualResult = MathOperations.addFiveAndFive();
+    Integer actualResult = OMathOperations.addFiveAndFive();
     Test.stopTest();
 
     // 2. Verify the result
@@ -20,7 +20,7 @@ private class OMathOperationsTest {
   static void testSubFiveAndFive() {
     // 1. Call the method
     Test.startTest();
-    Integer actualResult = MathOperations.subFiveAndFive();
+    Integer actualResult = OMathOperations.subFiveAndFive();
     Test.stopTest();
 
     // 2. Verify the result
