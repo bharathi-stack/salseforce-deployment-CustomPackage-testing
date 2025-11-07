@@ -67,7 +67,9 @@ jobs:
         run: |
           sfdx force:source:deploy --sourcepath force-app,force-app2 \
                                   --targetusername SandboxOrg \
-                                  --testlevel RunLocalTests
+                                  --testlevel RunLocalTests \
+                                  --wait 60 \
+                                  --verbose
           # --- FIX ---
           # The --checkonly flag has been removed.
           # This will now perform a REAL deployment to the sandbox.
