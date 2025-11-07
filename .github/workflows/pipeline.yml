@@ -42,10 +42,11 @@ jobs:
       # If Prettier or PMD fails, this job fails, and the entire pipeline stops here.
 
   # ========================================
-  # 2. SECOND JOB: Sandbox Deployment (Validate)
+  # 2. SECOND JOB: Sandbox Deployment
   # ========================================
   deploy_sandbox:
-    name: 2. Deploy to Sandbox (Validate)
+    # Name changed from "Validate" to "Deploy"
+    name: 2. Deploy to Sandbox
     runs-on: ubuntu-latest
     needs: validate_code # Depends on the 'validate_code' job succeeding
 
@@ -72,14 +73,17 @@ jobs:
           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Validate Sandbox Deployment (RunLocalTests)
+      # Name changed to "Deploy"
+      - name: Deploy to Sandbox (RunLocalTests)
         run: |
           sfdx force:source:deploy --sourcepath force-app \
                                   --targetusername SandboxOrg \
-                                  --testlevel RunLocalTests \
-                                  --checkonly # <-- --checkonly validates without deploying
-
-      # If --testlevel RunLocalTests fails, this job fails and blocks production.
+                                  --testlevel RunLocalTests
+          # --- FIX ---
+          # The --checkonly flag has been removed.
+          # This will now perform a REAL deployment to the sandbox.
+          # If tests fail, this job will fail and block production.
+          # --- END FIX ---
 
   # ========================================
   # 3. THIRD JOB: Production Deployment
@@ -114,4 +118,4 @@ jobs:
           sfdx force:source:deploy --sourcepath force-app \
                                   --targetusername ProdOrg \
                                   --testlevel RunLocalTests
-          # No --checkonly. This is the final, real deployment.
+          # This is the final, real deployment.
