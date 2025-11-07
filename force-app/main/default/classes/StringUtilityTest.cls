@@ -1,4 +1,4 @@
-@isTest 
+@isTest
 private class StringUtilityTest {
   @isTest
   static void testJoin() {
