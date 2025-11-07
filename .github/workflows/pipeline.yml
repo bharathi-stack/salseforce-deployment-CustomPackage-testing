@@ -1,3 +1,116 @@
+# name: Salesforce CI/CD Pipeline
+# on:
+#   push:
+#     branches:
+#       - dev
+
+# jobs:
+#   # ========================================
+#   # 1. FIRST JOB: Initial Process (Validate Code)
+#   # ========================================
+#   validate_code:
+#     name: 1. Validate Code (Prettier & PMD)
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Check out code
+#         uses: actions/checkout@v4
+
+#       - name: Set up Node.js
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: "20"
+
+#       - name: Install npm dependencies
+#         run: npm install
+
+#       - name: Install Salesforce CLI
+#         uses: sfdx-actions/setup-sfdx@v1
+
+#       - name: Run Prettier code format check
+#         run: npm run prettier:check
+#       - name: Run PMD code scan
+#         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
+
+#   # ========================================
+#   # 2. SECOND JOB: Sandbox Deployment
+#   # ========================================
+#   deploy_sandbox:
+#     name: 2. Deploy to Sandbox
+#     runs-on: ubuntu-latest
+#     needs: validate_code
+
+#     # This 'environment' block enables the manual approval gate
+#     environment:
+#       name: sandbox
+#       url: ${{ steps.auth_sandbox.outputs.org_url }}
+
+#     steps:
+#       - name: Check out code
+#         uses: actions/checkout@v4
+
+#       - name: Install Salesforce CLI
+#         uses: sfdx-actions/setup-sfdx@v1
+
+#       - name: Authenticate to Sandbox
+#         id: auth_sandbox
+#         run: |
+#           # Use the secret to create a temp auth file
+#           echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
+#           # Authenticate and set alias
+#           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
+#           # Get the org URL for the environment link
+#           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
+#           echo "org_url=$org_url" >> $GITHUB_OUTPUT
+
+#       # Name changed to "Deploy"
+#       - name: Deploy to Sandbox (RunLocalTests)
+#         run: |
+#           sfdx force:source:deploy --sourcepath force-app,force-app2 \
+#                                   --targetusername SandboxOrg \
+#                                   --testlevel RunLocalTests \
+#                                   --wait 60 \
+#                                   --verbose
+#           # --- FIX ---
+#           # The --checkonly flag has been removed.
+#           # This will now perform a REAL deployment to the sandbox.
+#           # If tests fail, this job will fail and block production.
+#           # --- END FIX ---
+
+#   # ========================================
+#   # 3. THIRD JOB: Production Deployment
+#   # ========================================
+#   deploy_production:
+#     name: 3. Deploy to Production
+#     runs-on: ubuntu-latest
+#     needs: deploy_sandbox
+
+#     # This 'environment' block enables the final manual approval
+#     environment:
+#       name: production
+#       url: ${{ steps.auth_prod.outputs.org_url }}
+
+#     steps:
+#       - name: Check out code
+#         uses: actions/checkout@v4
+
+#       - name: Install Salesforce CLI
+#         uses: sfdx-actions/setup-sfdx@v1
+
+#       - name: Authenticate to Production
+#         id: auth_prod
+#         run: |
+#           echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > sfdx_auth_file.txt
+#           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
+#           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
+#           echo "org_url=$org_url" >> $GITHUB_OUTPUT
+
+#       - name: Deploy to Production (RunLocalTests)
+#         run: |
+#           sfdx force:source:deploy --sourcepath force-app,force-app2 \
+#                                   --targetusername ProdOrg \
+#                                   --testlevel RunLocalTests
+#           # This is the final, real deployment.
+
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -24,6 +137,7 @@ jobs:
         run: npm install
 
       - name: Install Salesforce CLI
+        # Installs sf (v2) and sfdx (v7)
         uses: sfdx-actions/setup-sfdx@v1
 
       - name: Run Prettier code format check
@@ -32,10 +146,11 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
   # ========================================
-  # 2. SECOND JOB: Sandbox Deployment
+  # 2. SECOND JOB: Sandbox Validation
   # ========================================
-  deploy_sandbox:
-    name: 2. Deploy to Sandbox
+  validate_sandbox:
+    # Name changed to reflect it's a validation
+    name: 2. Validate against Sandbox
     runs-on: ubuntu-latest
     needs: validate_code
 
@@ -54,27 +169,26 @@ jobs:
       - name: Authenticate to Sandbox
         id: auth_sandbox
         run: |
-          # Use the secret to create a temp auth file
           echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
-          # Authenticate and set alias
           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
-          # Get the org URL for the environment link
           org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      # Name changed to "Deploy"
-      - name: Deploy to Sandbox (RunLocalTests)
+      # --- THIS IS THE UPDATED VALIDATION STEP ---
+      - name: Validate against Sandbox (RunLocalTests)
         run: |
-          sfdx force:source:deploy --sourcepath force-app,force-app2 \
-                                  --targetusername SandboxOrg \
-                                  --testlevel RunLocalTests \
-                                  --wait 60 \
-                                  --verbose
-          # --- FIX ---
-          # The --checkonly flag has been removed.
-          # This will now perform a REAL deployment to the sandbox.
-          # If tests fail, this job will fail and block production.
-          # --- END FIX ---
+          # Use 'sf project deploy validate' for a validation-only check
+          # Use '--source-dir' for each path with the new 'sf' syntax
+          sf project deploy validate \
+            --source-dir force-app \
+            --source-dir force-app2 \
+            --target-org SandboxOrg \
+            --test-level RunLocalTests \
+            --wait 60 \
+            --verbose
+          # We don't use '|| true' or capture JSON, so if this command
+          # fails, the step will fail and you will see all the
+          # test failures or component errors in the log.
 
   # ========================================
   # 3. THIRD JOB: Production Deployment
@@ -82,7 +196,8 @@ jobs:
   deploy_production:
     name: 3. Deploy to Production
     runs-on: ubuntu-latest
-    needs: deploy_sandbox
+    # Needs the new job name: validate_sandbox
+    needs: validate_sandbox
 
     # This 'environment' block enables the final manual approval
     environment:
@@ -104,9 +219,17 @@ jobs:
           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
+      # --- THIS IS THE UPDATED DEPLOYMENT STEP ---
       - name: Deploy to Production (RunLocalTests)
         run: |
-          sfdx force:source:deploy --sourcepath force-app,force-app2 \
-                                  --targetusername ProdOrg \
-                                  --testlevel RunLocalTests
-          # This is the final, real deployment.
+          # Use 'sf project deploy start' for the REAL deployment
+          # This command is the new version of 'sfdx force:source:deploy'
+          sf project deploy start \
+            --source-dir force-app \
+            --source-dir force-app2 \
+            --target-org ProdOrg \
+            --test-level RunLocalTests \
+            --wait 60 \
+            --verbose
+          # Added --wait 60 and --verbose so this step will also
+          # wait for the result and show you any errors.
