@@ -20,11 +20,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install npm dependencies
         # Assumes prettier and sfdx-scanner are in your package.json
-        run: npm install 
+        run: npm install
 
       - name: Install Salesforce CLI
         # Using the sfdx-actions/setup-sfdx@v1 action
@@ -48,7 +48,7 @@ jobs:
     name: 2. Deploy to Sandbox (Validate)
     runs-on: ubuntu-latest
     needs: validate_code # Depends on the 'validate_code' job succeeding
-    
+
     # This 'environment' block enables the manual approval gate
     environment:
       name: sandbox
