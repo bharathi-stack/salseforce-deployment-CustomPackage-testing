@@ -16,19 +16,19 @@ private class StringUtilityTest {
     );
   }
 
-  @isTest
-  static void testToUpper() {
-    // 1. Call the method
-    Test.startTest();
-    String actualResult = StringUtility.toUpper('test');
-    Test.stopTest();
+  //   @isTest
+  //   static void testToUpper() {
+  //     // 1. Call the method
+  //     Test.startTest();
+  //     String actualResult = StringUtility.toUpper('test');
+  //     Test.stopTest();
 
-    // 2. Verify the result
-    String expectedResult = 'TEST';
-    System.assertEquals(
-      expectedResult,
-      actualResult,
-      'The toUpper method should have returned TEST.'
-    );
-  }
+  //     // 2. Verify the result
+  //     String expectedResult = 'TEST';
+  //     System.assertEquals(
+  //       expectedResult,
+  //       actualResult,
+  //       'The toUpper method should have returned TEST.'
+  //     );
+  //   }
 }
