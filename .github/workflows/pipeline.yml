@@ -37,7 +37,7 @@ jobs:
 
       - name: Run PMD code scan
         # This command fails the job if any PMD violations are found.
-        run: sfdx scanner:run --target "force-app" --engine "pmd" --violations-cause-build-failure
+        run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
       # If Prettier or PMD fails, this job fails, and the entire pipeline stops here.
 
@@ -76,7 +76,7 @@ jobs:
       # Name changed to "Deploy"
       - name: Deploy to Sandbox (RunLocalTests)
         run: |
-          sfdx force:source:deploy --sourcepath force-app \
+          sfdx force:source:deploy --sourcepath force-app,force-app2 \
                                   --targetusername SandboxOrg \
                                   --testlevel RunLocalTests
           # --- FIX ---
@@ -115,7 +115,7 @@ jobs:
 
       - name: Deploy to Production (RunLocalTests)
         run: |
-          sfdx force:source:deploy --sourcepath force-app \
+          sfdx force:source:deploy --sourcepath force-app,force-app2 \
                                   --targetusername ProdOrg \
                                   --testlevel RunLocalTests
           # This is the final, real deployment.
