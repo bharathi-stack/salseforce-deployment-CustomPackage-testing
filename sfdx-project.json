@@ -2,11 +2,18 @@
   "packageDirectories": [
     {
       "path": "force-app",
-      "default": true
+      "default": true,
+      "package": "SalesApp",
+      "versionName": "1.0.0.NEXT"
+    },
+    {
+      "path": "force-app2",
+      "default": false,
+      "package": "CloudApp",
+      "versionName": "1.0.0.NEXT"
     }
   ],
-  "name": "MyProject",
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "64.0"
+  "sourceApiVersion": "59.0"
 }
