@@ -1,5 +1,5 @@
 @isTest
-private class MathOperationsTest {
+private class OMathOperationsTest2 {
   @isTest
   static void testMulFiveAndFive() {
     // 1. Call the method
