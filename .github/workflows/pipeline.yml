@@ -461,7 +461,7 @@ jobs:
 
       # --- THIS STEP IS NOW FIXED ---
       - name: Run PMD code scan
-        run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 3
+        run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 2
       # ----------------------------
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
