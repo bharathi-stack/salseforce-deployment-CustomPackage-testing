@@ -123,11 +123,6 @@
 #             --wait 60 \
 #             --verbose
 
-
-
-
-
-
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -401,11 +396,6 @@ jobs:
             --target-org ProdOrg \
             --verbose
 
-
-
-
-
-
 # # working flow without QA
 # name: Salesforce CI/CD Pipeline
 # on:
@@ -508,7 +498,7 @@ jobs:
 #           if [ "$STATUS" -eq 0 ]; then
 #             VALIDATION_ID=$(jq -r .result.id validation-result.json)
 #             echo "Validation successful. Job ID: $VALIDATION_ID"
-#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 #           else
 #             echo "Validation failed."
 #             jq -r ".result | .message" validation-result.json
@@ -597,7 +587,7 @@ jobs:
 #           if [ "$STATUS" -eq 0 ]; then
 #             VALIDATION_ID=$(jq -r .result.id validation-result-prod.json)
 #             echo "Production validation successful. Job ID: $VALIDATION_ID"
-#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 #           else
 #             echo "Production validation failed."
 #             jq -r ".result | .message" validation-result-prod.json
