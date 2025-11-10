@@ -123,9 +123,6 @@
 #             --wait 60 \
 #             --verbose
 
-
-
-
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -158,10 +155,10 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
   # ========================================
-  # 2. SECOND JOB: Generate Delta & Validate
+  # 2. SECOND JOB: Validate & Deploy to Sandbox
   # ========================================
-  validate_sandbox:
-    name: 2. Generate Delta & Validate
+  validate_and_deploy_sandbox: # <-- RENAMED JOB
+    name: 2. Validate & Deploy to Sandbox # <-- RENAMED JOB TITLE
     runs-on: ubuntu-latest
     needs: validate_code
     environment:
@@ -207,24 +204,50 @@ jobs:
 
       - name: Validate Delta against Sandbox
         if: steps.find_files.outputs.delta_exists == 'true'
+        id: validate_delta # <-- Added an ID to this step
         run: |
           echo "Validating delta changes..."
-
-          # This job correctly uses the delta
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-
-          if [ -z "$SOURCE_PATHS" ]; then
-            echo "No paths to validate."
-            exit 0
-          fi
-
+          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
           echo "Validating paths: $SOURCE_PATHS"
 
+          # *** MODIFICATION ***
+          # Run with --json to capture the output to a file
           sf project deploy validate \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
             --test-level RunLocalTests \
             --wait 60 \
+            --verbose \
+            --json > validation-result.json
+
+          echo "--- Validation Result JSON ---"
+          cat validation-result.json
+          echo "------------------------------"
+
+          # Check status and extract Job ID
+          STATUS=$(jq -r .status validation-result.json)
+          if [ "$STATUS" -eq 0 ]; then
+            VALIDATION_ID=$(jq -r .result.id validation-result.json)
+            echo "Validation successful. Job ID: $VALIDATION_ID"
+            # Save the Job ID for the next step
+            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+          else
+            echo "Validation failed."
+            # Print error details from Salesforce
+            jq -r ".result | .message" validation-result.json
+            exit 1 # Fail the job
+          fi
+
+      # *** NEW STEP ***
+      - name: Deploy Delta to Sandbox (Quick Deploy)
+        # This step only runs if the 'validate_delta' step was successful and output a validation_id
+        if: steps.validate_delta.outputs.validation_id
+        run: |
+          echo "Validation complete. Proceeding with quick deploy to Sandbox."
+          sf project deploy quick \
+            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
+            --target-org SandboxOrg \
             --verbose
 
   # ========================================
@@ -233,9 +256,9 @@ jobs:
   deploy_production:
     name: 3. Deploy to Production
     runs-on: ubuntu-latest
-    needs: validate_sandbox
+    needs: validate_and_deploy_sandbox # <-- UPDATED: Now depends on the new sandbox job
     # This job will still only run if the delta exists, which is good practice
-    if: needs.validate_sandbox.outputs.delta_exists == 'true'
+    if: needs.validate_and_deploy_sandbox.outputs.delta_exists == 'true' # <-- UPDATED
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
@@ -243,8 +266,6 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          # *** MODIFICATION HERE ***
-          # We now need fetch-depth: 0 to run git diff, just like in the sandbox job
           fetch-depth: 0
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
@@ -255,19 +276,14 @@ jobs:
         run: |
           echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > sfdx_auth_file.txt
           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
-          org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
+          org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sdofxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      # *** MODIFICATION HERE ***
-      # Added the same "Find changed metadata files" step from the sandbox job
       - name: Find changed metadata files for Prod
         id: find_files_prod
         run: |
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
-          echo "--- All changed files ---"
-          cat changed-files.txt
-          echo "-------------------------"
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
           echo "--- Salesforce changes to deploy ---"
           cat salesforce-changes.txt
@@ -276,31 +292,24 @@ jobs:
             echo "No Salesforce metadata changes detected. This is unexpected."
           fi
 
-      # *** MODIFICATION HERE ***
-      # Changed from "Deploy Full Source" to "Deploy Delta"
       - name: Deploy Delta to Production
         run: |
           echo "Deploying delta changes to Production..."
-
-          # This script is copied from the 'validate_sandbox' job
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-
           if [ -z "$SOURCE_PATHS" ]; then
             echo "No paths to deploy. This is unexpected as the job should have been skipped."
-            exit 1 # Exit with failure
+            exit 1
           fi
 
           echo "Deploying paths: $SOURCE_PATHS"
 
-          # Using "sf project deploy start" (the actual deployment)
+          # This is the full deployment command, which runs tests again (best practice for Prod)
           sf project deploy start \
             $SOURCE_PATHS \
             --target-org ProdOrg \
             --test-level RunLocalTests \
             --wait 60 \
             --verbose
-
-
 
 # # delta for sandbox
 
