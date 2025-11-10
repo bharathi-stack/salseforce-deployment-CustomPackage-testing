@@ -4,6 +4,7 @@
         <members>call1__c</members>
         <members>sell1__c</members>
         <members>layout__c</members>
+        <members>lists__c</members>
         <name>CustomObject</name>
     </types>
     <types>
