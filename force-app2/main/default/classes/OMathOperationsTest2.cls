@@ -1,4 +1,4 @@
-// testin
+// testing
 @isTest
 private class OMathOperationsTest2 {
   @isTest
@@ -21,7 +21,7 @@ private class OMathOperationsTest2 {
     Integer actualResult = OMathOperations2.addFiveAndFive();
     Test.stopTest();
 
-    Integer expectedResult = 0;
+    Integer expectedResult = 10;
     System.assertEquals(
       expectedResult,
       actualResult,
