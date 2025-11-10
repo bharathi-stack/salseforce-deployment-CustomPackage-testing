@@ -1,3 +1,28 @@
+// // testingss
+// public class OMathOperations2 {
+//   /**
+//    * @description Multiplies 5 and 5 together.
+//    * @return Integer The product of 5 * 5.
+//    */
+//   public static Integer mulFiveAndFive() {
+//     Integer a = 5;
+//     Integer b = 5;
+//     Integer result = a * b;
+//     return result;
+//   }
+
+//   /**
+//    * @description Adds 5 and 5 together.
+//    * @return Integer The sum of 5 + 5.
+//    */
+//   public static Integer addFiveAndFive() {
+//     Integer a = 5;
+//     Integer b = 5;
+//     Integer result = a + b;
+//     return result;
+//   }
+// }
+
 // testingss
 public class OMathOperations2 {
   /**
@@ -8,6 +33,14 @@ public class OMathOperations2 {
     Integer a = 5;
     Integer b = 5;
     Integer result = a * b;
+
+    try {
+      // Just some dummy code
+      result = result + 1;
+    } catch (Exception e) {
+      // THIS EMPTY BLOCK IS A VIOLATION
+    }
+
     return result;
   }
 
