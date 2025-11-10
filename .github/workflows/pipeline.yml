@@ -455,7 +455,7 @@ jobs:
       - name: Run PMD code scan
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
-# ... (your 'validate_code' job is unchanged) ...
+  # ... (your 'validate_code' job is unchanged) ...
 
   # ========================================
   # 2. SECOND JOB: Validate & Deploy to Sandbox
@@ -514,7 +514,7 @@ jobs:
           echo "Validating delta changes against Sandbox..."
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
           if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
-          
+
           echo "Validating paths: $SOURCE_PATHS"
 
           # Use '|| true' to capture output even on failure
@@ -624,7 +624,7 @@ jobs:
       url: ${{ steps.auth_prod.outputs.org_url }}
     steps:
       # ... (checkout, setup-sfdx, auth, find_files steps are unchanged) ...
-      
+
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -682,7 +682,7 @@ jobs:
           echo "-----------------------------------------"
 
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
-          
+
           if [ "$STATUS" -eq 0 ]; then
             # SUCCESS
             echo "Production validation successful."
