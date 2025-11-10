@@ -155,12 +155,95 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
   # ========================================
-  # 2. SECOND JOB: Validate & Deploy to Sandbox
+  # 2. SECOND JOB: Validate & Deploy to QA
   # ========================================
-  validate_and_deploy_sandbox:
-    name: 2. Validate & Deploy to Sandbox
+  validate_and_deploy_qa:
+    name: 2. Validate & Deploy to QA
     runs-on: ubuntu-latest
     needs: validate_code
+    environment:
+      name: qa # <-- Remember to create this environment
+      url: ${{ steps.auth_qa.outputs.org_url }}
+    outputs:
+      delta_exists: ${{ steps.find_files_qa.outputs.delta_exists }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Salesforce CLI
+        uses: sfdx-actions/setup-sfdx@v1
+      - name: Force-update Salesforce CLI
+        run: sf update
+      - name: Authenticate to QA
+        id: auth_qa
+        run: |
+          # <-- Remember to add the SFDX_QA_AUTH_URL secret
+          echo "${{ secrets.SFDX_QA_AUTH_URL }}" > sfdx_auth_file_qa.txt
+          sfdx auth:sfdxurl:store -f sfdx_auth_file_qa.txt -a QAOrg -s
+          org_url=$(sfdx force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "org_url=$org_url" >> $GITHUB_OUTPUT
+      - name: Find changed metadata files for QA
+        id: find_files_qa
+        run: |
+          echo "Finding changes between HEAD~1 and HEAD"
+          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          echo "--- Salesforce changes ---"
+          cat salesforce-changes.txt
+          echo "--------------------------"
+          if [ -s salesforce-changes.txt ]; then
+            echo "Salesforce changes detected."
+            echo "delta_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No Salesforce metadata changes detected. Skipping validation."
+            echo "delta_exists=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Validate Delta against QA
+        if: steps.find_files_qa.outputs.delta_exists == 'true'
+        id: validate_delta_qa
+        run: |
+          echo "Validating delta changes against QA..."
+          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
+          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
+          echo "Validating paths: $SOURCE_PATHS"
+          sf project deploy validate \
+            $SOURCE_PATHS \
+            --target-org QAOrg \
+            --test-level RunLocalTests \
+            --wait 60 \
+            --verbose \
+            --json > validation-result-qa.json
+          echo "--- QA Validation Result JSON ---"
+          cat validation-result-qa.json
+          echo "-----------------------------------"
+          STATUS=$(jq -r .status validation-result-qa.json)
+          if [ "$STATUS" -eq 0 ]; then
+            VALIDATION_ID=$(jq -r .result.id validation-result-qa.json)
+            echo "Validation successful. Job ID: $VALIDATION_ID"
+            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+          else
+            echo "Validation failed."
+            jq -r ".result | .message" validation-result-qa.json
+            exit 1
+          fi
+      - name: Deploy Delta to QA (Quick Deploy)
+        if: steps.validate_delta_qa.outputs.validation_id
+        run: |
+          echo "Validation complete. Proceeding with quick deploy to QA."
+          sf project deploy quick \
+            --job-id ${{ steps.validate_delta_qa.outputs.validation_id }} \
+            --target-org QAOrg \
+            --verbose
+
+  # ========================================
+  # 3. THIRD JOB: Validate & Deploy to Sandbox
+  # ========================================
+  validate_and_deploy_sandbox:
+    name: 3. Validate & Deploy to Sandbox
+    runs-on: ubuntu-latest
+    needs: validate_and_deploy_qa # <-- Runs after QA
+    if: needs.validate_and_deploy_qa.outputs.delta_exists == 'true' # <-- Skips if no delta in QA
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
@@ -236,96 +319,13 @@ jobs:
             --verbose
 
   # ========================================
-  # 3. NEW QA JOB
-  # ========================================
-  validate_and_deploy_qa:
-    name: 3. Validate & Deploy to QA
-    runs-on: ubuntu-latest
-    needs: validate_and_deploy_sandbox
-    if: needs.validate_and_deploy_sandbox.outputs.delta_exists == 'true'
-    environment:
-      name: qa # <-- User needs to create this environment in GitHub
-      url: ${{ steps.auth_qa.outputs.org_url }}
-    outputs:
-      delta_exists: ${{ steps.find_files_qa.outputs.delta_exists }}
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
-      - name: Force-update Salesforce CLI
-        run: sf update
-      - name: Authenticate to QA
-        id: auth_qa
-        run: |
-          # <-- User needs to add SFDX_QA_AUTH_URL secret
-          echo "${{ secrets.SFDX_QA_AUTH_URL }}" > sfdx_auth_file_qa.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file_qa.txt -a QAOrg -s
-          org_url=$(sfdx force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
-          echo "org_url=$org_url" >> $GITHUB_OUTPUT
-      - name: Find changed metadata files for QA
-        id: find_files_qa
-        run: |
-          echo "Finding changes between HEAD~1 and HEAD"
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
-          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
-          echo "--- Salesforce changes ---"
-          cat salesforce-changes.txt
-          echo "--------------------------"
-          if [ -s salesforce-changes.txt ]; then
-            echo "Salesforce changes detected."
-            echo "delta_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "No Salesforce metadata changes detected. Skipping validation."
-            echo "delta_exists=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Validate Delta against QA
-        if: steps.find_files_qa.outputs.delta_exists == 'true'
-        id: validate_delta_qa
-        run: |
-          echo "Validating delta changes against QA..."
-          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
-          echo "Validating paths: $SOURCE_PATHS"
-          sf project deploy validate \
-            $SOURCE_PATHS \
-            --target-org QAOrg \
-            --test-level RunLocalTests \
-            --wait 60 \
-            --verbose \
-            --json > validation-result-qa.json
-          echo "--- QA Validation Result JSON ---"
-          cat validation-result-qa.json
-          echo "-----------------------------------"
-          STATUS=$(jq -r .status validation-result-qa.json)
-          if [ "$STATUS" -eq 0 ]; then
-            VALIDATION_ID=$(jq -r .result.id validation-result-qa.json)
-            echo "Validation successful. Job ID: $VALIDATION_ID"
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
-          else
-            echo "Validation failed."
-            jq -r ".result | .message" validation-result-qa.json
-            exit 1
-          fi
-      - name: Deploy Delta to QA (Quick Deploy)
-        if: steps.validate_delta_qa.outputs.validation_id
-        run: |
-          echo "Validation complete. Proceeding with quick deploy to QA."
-          sf project deploy quick \
-            --job-id ${{ steps.validate_delta_qa.outputs.validation_id }} \
-            --target-org QAOrg \
-            --verbose
-
-  # ========================================
   # 4. FINAL JOB: Production Deployment
   # ========================================
   deploy_production:
-    name: 4. Deploy to Production # <-- Renamed to 4
+    name: 4. Deploy to Production
     runs-on: ubuntu-latest
-    needs: validate_and_deploy_qa # <-- Updated dependency
-    if: needs.validate_and_deploy_qa.outputs.delta_exists == 'true' # <-- Updated check
+    needs: validate_and_deploy_sandbox # <-- Runs after Sandbox
+    if: needs.validate_and_deploy_sandbox.outputs.delta_exists == 'true' # <-- Skips if no delta in Sandbox
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
@@ -350,7 +350,7 @@ jobs:
         run: |
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
-          grep -E "(force-ap/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
           echo "--- Salesforce changes to deploy ---"
           cat salesforce-changes.txt
           echo "------------------------------------"
