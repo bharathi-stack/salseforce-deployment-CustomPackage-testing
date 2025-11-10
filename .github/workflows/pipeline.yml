@@ -443,7 +443,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-node: "20"
 
       - name: Install npm dependencies
         run: npm install
@@ -461,7 +461,7 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
-        run: sf scanner run --target "force-app,force-app2" --rule-selector "AppExchange,Recommended:Security" --outfile CodeAnalyzerReport.html --format html
+        run: sf scanner run --target "force-app,force-app2" --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
 
       - name: Upload Code Analyzer Report
         if: always()
