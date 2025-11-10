@@ -456,18 +456,24 @@ jobs:
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
 
+      # --- CHANGE 1: Added id and continue-on-error ---
       - name: Run Prettier code format check
+        id: prettier_check
         run: npm run prettier:check
+        continue-on-error: true # Allows workflow to continue
 
-      # --- THIS STEP IS NOW FIXED ---
+      # --- CHANGE 2: Added id and continue-on-error ---
       - name: Run PMD code scan
+        id: pmd_scan
         run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 2
-      # ----------------------------
+        continue-on-error: true # Allows workflow to continue
 
+      # This step will now run even if PMD fails
       - name: Run Code Analyzer (AppExchange & Security Rules)
         run: sf scanner run --target force-app --target force-app2 --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
-        continue-on-error: true
+        continue-on-error: true # Good to keep this here too
 
+      # This step will now find the file and upload it
       - name: Upload Code Analyzer Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -475,6 +481,23 @@ jobs:
           name: code-analyzer-report
           path: CodeAnalyzerReport.html
           retention-days: 30
+
+      # --- CHANGE 3: NEW FINAL STEP ---
+      # This step checks the results of the previous steps and fails the job if needed
+      - name: Check Scan Results
+        if: always() # Always run this step
+        run: |
+          if [ "${{ steps.prettier_check.outcome }}" == "failure" ]; then
+            echo "::error::Prettier check failed. See logs above."
+          fi
+          if [ "${{ steps.pmd_scan.outcome }}" == "failure" ]; then
+            echo "::error::PMD scan failed with violations. See logs above."
+          fi
+
+          # If EITHER of the checks failed, exit with an error code to fail the job
+          if [ "${{ steps.prettier_check.outcome }}" == "failure" ] || [ "${{ steps.pmd_scan.outcome }}" == "failure" ]; then
+            exit 1
+          fi
   # ========================================
   # 2. NEW JOB: Validate & Deploy to QA
   # ========================================
