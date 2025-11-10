@@ -423,6 +423,7 @@
 
 # -----------------------------------------------------------------------------------------------------------------
 
+# working flow without QA
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -434,7 +435,7 @@ jobs:
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
   validate_code:
-    name:  Pre Validation
+    name: Pre Validation (Prettier & PMD)
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -454,6 +455,8 @@ jobs:
       - name: Run PMD code scan
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
+# ... (your 'validate_code' job is unchanged) ...
+
   # ========================================
   # 2. SECOND JOB: Validate & Deploy to Sandbox
   # ========================================
@@ -467,6 +470,8 @@ jobs:
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
+      # ... (checkout, setup-sfdx, auth, find_files steps are unchanged) ...
+
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -499,6 +504,9 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # ===================================================================
+      # *** MODIFIED STEP: Validate Delta against Sandbox (with details) ***
+      # ===================================================================
       - name: Validate Delta against Sandbox
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta_sandbox
@@ -506,43 +514,92 @@ jobs:
           echo "Validating delta changes against Sandbox..."
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
           if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
+          
           echo "Validating paths: $SOURCE_PATHS"
 
-          sf project deploy validate \
+          # Use '|| true' to capture output even on failure
+          VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
             --test-level RunLocalTests \
             --wait 60 \
             --verbose \
-            --json > validation-result.json
-
+            --json) || true
+            
           echo "--- Sandbox Validation Result JSON ---"
-          cat validation-result.json
+          echo "$VALIDATION_JSON" | jq .
           echo "--------------------------------------"
 
-          STATUS=$(jq -r .status validation-result.json)
+          STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+
           if [ "$STATUS" -eq 0 ]; then
-            VALIDATION_ID=$(jq -r .result.id validation-result.json)
-            echo "Validation successful. Job ID: $VALIDATION_ID"
+            # SUCCESS
+            echo "Validation successful."
+            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-          else
-            # *** MODIFIED BLOCK ***
-            # This new else block provides detailed error messages
-            echo "::error::Salesforce validation failed on Sandbox. See details below."
             
-            echo "--- Component Failures (Compile Errors) ---"
-            jq -r '.result.details.componentFailures[]? | "File: \(.fileName) | Line: \(.lineNumber) | Error: \(.problem)"' validation-result.json
-
-            echo "--- Test Failures ---"
-            jq -r '.result.details.runTestResult.failures[]? | "Class: \(.name) | Method: \(.methodName) | Error: \(.message) \nStack Trace: \(.stackTrace)\n"' validation-result.json
-
-            if ! jq -e '.result.details' validation-result.json > /dev/null; then
-              echo "--- Summary Message ---"
-              jq -r ".result.message" validation-result.json
+            # Print coverage details even on success
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            
+            if [ "$TOTAL_LINES" -gt 0 ]; then
+              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+              echo "--- Code Coverage (Success) ---"
+              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+              echo "COVERAGE: $COVERAGE_PERCENT%"
+              echo "-------------------------------"
             fi
+            
+          else
+            # FAILURE
+            echo "Validation FAILED. Parsing results..."
+            
+            # Check for test failures and coverage
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            
+            if [ "$TEST_RESULT" != "null" ]; then
+              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              
+              echo "--- Test Run Summary (Failure) ---"
+              echo "Total Tests Run: $NUM_TESTS"
+              echo "Total Failures: $NUM_FAILED"
+              
+              if [ "$NUM_FAILED" -gt 0 ]; then
+                echo "--- Failing Tests ---"
+                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
+                echo "---------------------"
+              fi
 
-            exit 1
-            # *** END OF MODIFIED BLOCK ***
+              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+              
+              if [ "$TOTAL_LINES" -gt 0 ]; then
+                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+                echo "--- Code Coverage ---"
+                echo "Total Lines: $TOTAL_LINES"
+                echo "Lines Covered: $LINES_COVERED"
+                echo "COVERAGE: $COVERAGE_PERCENT%"
+                
+                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+                fi
+                echo "---------------------"
+              else
+                echo "No lines found for coverage calculation."
+              fi
+            fi
+            
+            # Check for component (compilation) failures
+            COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
+            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
+              echo "--- Component Failures (Compilation Errors) ---"
+              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "-----------------------------------------------"
+            fi
+            
+            exit 1 # Fail the job
           fi
 
       - name: Deploy Delta to Sandbox (Quick Deploy)
@@ -566,6 +623,8 @@ jobs:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
     steps:
+      # ... (checkout, setup-sfdx, auth, find_files steps are unchanged) ...
+      
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -581,7 +640,6 @@ jobs:
           sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
           org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
-
       - name: Find changed metadata files for Prod
         id: find_files_prod
         run: |
@@ -595,6 +653,9 @@ jobs:
             echo "No Salesforce metadata changes detected. This is unexpected."
           fi
 
+      # =====================================================================
+      # *** MODIFIED STEP: Validate Delta against Production (with details) ***
+      # =====================================================================
       - name: Validate Delta against Production
         id: validate_delta_prod
         run: |
@@ -607,41 +668,89 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          sf project deploy validate \
+          # Use '|| true' to capture output even on failure
+          VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org ProdOrg \
             --test-level RunLocalTests \
             --wait 60 \
             --verbose \
-            --json > validation-result-prod.json
+            --json) || true
 
           echo "--- Production Validation Result JSON ---"
-          cat validation-result-prod.json
+          echo "$VALIDATION_JSON" | jq .
           echo "-----------------------------------------"
 
-          STATUS=$(jq -r .status validation-result-prod.json)
+          STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+          
           if [ "$STATUS" -eq 0 ]; then
-            VALIDATION_ID=$(jq -r .result.id validation-result-prod.json)
-            echo "Production validation successful. Job ID: $VALIDATION_ID"
+            # SUCCESS
+            echo "Production validation successful."
+            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-          else
-            # *** MODIFIED BLOCK ***
-            # This new else block provides detailed error messages
-            echo "::error::Salesforce validation failed on Production. See details below."
             
-            echo "--- Component Failures (Compile Errors) ---"
-            jq -r '.result.details.componentFailures[]? | "File: \(.fileName) | Line: \(.lineNumber) | Error: \(.problem)"' validation-result-prod.json
-
-            echo "--- Test Failures ---"
-            jq -r '.result.details.runTestResult.failures[]? | "Class: \(.name) | Method: \(.methodName) | Error: \(.message) \nStack Trace: \(.stackTrace)\n"' validation-result-prod.json
-
-            if ! jq -e '.result.details' validation-result-prod.json > /dev/null; then
-              echo "--- Summary Message ---"
-              jq -r ".result.message" validation-result-prod.json
+            # Print coverage details even on success
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            
+            if [ "$TOTAL_LINES" -gt 0 ]; then
+              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+              echo "--- Code Coverage (Success) ---"
+              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+              echo "COVERAGE: $COVERAGE_PERCENT%"
+              echo "-------------------------------"
             fi
             
-            exit 1
-            # *** END OF MODIFIED BLOCK ***
+          else
+            # FAILURE
+            echo "Production validation FAILED. Parsing results..."
+            
+            # Check for test failures and coverage
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            
+            if [ "$TEST_RESULT" != "null" ]; then
+              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              
+              echo "--- Test Run Summary (Failure) ---"
+              echo "Total Tests Run: $NUM_TESTS"
+              echo "Total Failures: $NUM_FAILED"
+              
+              if [ "$NUM_FAILED" -gt 0 ]; then
+                echo "--- Failing Tests ---"
+                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
+                echo "---------------------"
+              fi
+
+              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+              
+              if [ "$TOTAL_LINES" -gt 0 ]; then
+                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+                echo "--- Code Coverage ---"
+                echo "Total Lines: $TOTAL_LINES"
+                echo "Lines Covered: $LINES_COVERED"
+                echo "COVERAGE: $COVERAGE_PERCENT%"
+                
+                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+                fi
+                echo "---------------------"
+              else
+                echo "No lines found for coverage calculation."
+              fi
+            fi
+            
+            # Check for component (compilation) failures
+            COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
+            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
+              echo "--- Component Failures (Compilation Errors) ---"
+              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "-----------------------------------------------"
+            fi
+            
+            exit 1 # Fail the job
           fi
 
       - name: Deploy Delta to Production (Quick Deploy)
