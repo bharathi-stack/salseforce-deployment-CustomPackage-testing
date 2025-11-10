@@ -227,10 +227,33 @@ jobs:
             jq -r ".result | .message" validation-result-qa.json
             exit 1
           fi
-      - name: Deploy Delta to QA (Quick Deploy)
+          
+      # *** NEW STEP ADDED HERE ***
+      # This step reads the JSON from the validation and fails the job if coverage is low.
+      - name: Enforce 75% Code Coverage for QA
         if: steps.validate_delta_qa.outputs.validation_id
         run: |
-          echo "Validation complete. Proceeding with quick deploy to QA."
+          echo "Enforcing 75% code coverage requirement..."
+          
+          # Get count of classes with coverage < 75%
+          # This parses the 'apexCodeCoverage' array from the validation JSON
+          LOW_COVERAGE_COUNT=$(jq '[.result.details.runTestResult.apexCodeCoverage[] | select((.percentage | sub("%"; "") | tonumber) < 75)] | length' validation-result-qa.json)
+          
+          if [ "$LOW_COVERAGE_COUNT" -gt 0 ]; then
+            echo "Error: $LOW_COVERAGE_COUNT Apex class(es) are below the 75% code coverage requirement."
+            echo "Failing classes:"
+            # Print the names and percentages of failing classes for easy debugging
+            jq -r '.result.details.runTestResult.apexCodeCoverage[] | select((.percentage | sub("%"; "") | tonumber) < 75) | "  - \(.name) (\(.percentage))"' validation-result-qa.json
+            exit 1
+          else
+            echo "All classes meet the 75% code coverage requirement."
+          fi
+
+      - name: Deploy Delta to QA (Quick Deploy)
+        # This step will only run if the validation AND the coverage check above were successful
+        if: steps.validate_delta_qa.outputs.validation_id
+        run: |
+          echo "Validation and coverage check complete. Proceeding with quick deploy to QA."
           sf project deploy quick \
             --job-id ${{ steps.validate_delta_qa.outputs.validation_id }} \
             --target-org QAOrg \
