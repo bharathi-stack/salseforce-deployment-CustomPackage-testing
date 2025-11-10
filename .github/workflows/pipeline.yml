@@ -423,7 +423,6 @@
 
 # -----------------------------------------------------------------------------------------------------------------
 
-# working flow without QA
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -455,23 +454,161 @@ jobs:
       - name: Run PMD code scan
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
-  # ... (your 'validate_code' job is unchanged) ...
+  # ========================================
+  # 2. NEW JOB: Validate & Deploy to QA
+  # ========================================
+  qa_deployment:
+    name: Deploy to QA
+    runs-on: ubuntu-latest
+    needs: validate_code # <--- Runs after pre-validation
+    environment:
+      name: qa # <--- Assumes you created a 'qa' environment in GitHub
+      url: ${{ steps.auth_qa.outputs.org_url }}
+    outputs:
+      delta_exists: ${{ steps.find_files.outputs.delta_exists }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Salesforce CLI
+        uses: sfdx-actions/setup-sfdx@v1
+      - name: Force-update Salesforce CLI
+        run: sf update
+      - name: Authenticate to QA Org
+        id: auth_qa
+        run: |
+          echo "${{ secrets.SFDX_QA_AUTH_URL }}" > sfdx_auth_file.txt
+          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a QAOrg -s
+          org_url=$(sfdx force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "org_url=$org_url" >> $GITHUB_OUTPUT
+      - name: Find changed metadata files
+        id: find_files
+        run: |
+          echo "Finding changes between HEAD~1 and HEAD"
+          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          echo "--- Salesforce changes ---"
+          cat salesforce-changes.txt
+          echo "--------------------------"
+          if [ -s salesforce-changes.txt ]; then
+            echo "Salesforce changes detected."
+            echo "delta_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No Salesforce metadata changes detected. Skipping validation."
+            echo "delta_exists=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Validate Delta against QA Org
+        if: steps.find_files.outputs.delta_exists == 'true'
+        id: validate_delta_qa
+        run: |
+          echo "Validating delta changes against QA Org..."
+          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
+          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
+
+          echo "Validating paths: $SOURCE_PATHS"
+
+          VALIDATION_JSON=$(sf project deploy validate \
+            $SOURCE_PATHS \
+            --target-org QAOrg \
+            --test-level RunLocalTests \
+            --wait 60 \
+            --verbose \
+            --json) || true
+            
+          echo "--- QA Validation Result JSON ---"
+          echo "$VALIDATION_JSON" | jq .
+          echo "---------------------------------"
+
+          STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "Validation successful."
+            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
+            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
+            
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            
+            if [ "$TOTAL_LINES" -gt 0 ]; then
+              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+              echo "--- Code Coverage (Success) ---"
+              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+              echo "COVERAGE: $COVERAGE_PERCENT%"
+              echo "-------------------------------"
+            fi
+            
+          else
+            echo "Validation FAILED. Parsing results..."
+            
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            
+            if [ "$TEST_RESULT" != "null" ]; then
+              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              
+              echo "--- Test Run Summary (Failure) ---"
+              echo "Total Tests Run: $NUM_TESTS"
+              echo "Total Failures: $NUM_FAILED"
+              
+              if [ "$NUM_FAILED" -gt 0 ]; then
+                echo "--- Failing Tests ---"
+                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
+                echo "---------------------"
+              fi
+
+              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+              
+              if [ "$TOTAL_LINES" -gt 0 ]; then
+                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+                echo "--- Code Coverage ---"
+                echo "Total Lines: $TOTAL_LINES"
+                echo "Lines Covered: $LINES_COVERED"
+                echo "COVERAGE: $COVERAGE_PERCENT%"
+                
+                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+                fi
+                echo "---------------------"
+              else
+                echo "No lines found for coverage calculation."
+              fi
+            fi
+            
+            COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
+            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
+              echo "--- Component Failures (Compilation Errors) ---"
+              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "-----------------------------------------------"
+            fi
+            
+            exit 1 # Fail the job
+          fi
+      - name: Deploy Delta to QA Org (Quick Deploy)
+        if: steps.validate_delta_qa.outputs.validation_id
+        run: |
+          echo "Validation complete. Proceeding with quick deploy to QA Org."
+          sf project deploy quick \
+            --job-id ${{ steps.validate_delta_qa.outputs.validation_id }} \
+            --target-org QAOrg \
+            --verbose
 
   # ========================================
-  # 2. SECOND JOB: Validate & Deploy to Sandbox
+  # 3. THIRD JOB: Validate & Deploy to Sandbox
   # ========================================
   staging_deployment:
     name: Deploy to staging
     runs-on: ubuntu-latest
-    needs: validate_code
+    needs: qa_deployment # <--- MODIFIED: Now runs after the 'qa_deployment' job
+    if: needs.qa_deployment.outputs.delta_exists == 'true' # Ensures we skip if QA found no delta
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
-      # ... (checkout, setup-sfdx, auth, find_files steps are unchanged) ...
-
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -503,10 +640,6 @@ jobs:
             echo "No Salesforce metadata changes detected. Skipping validation."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
-
-      # ===================================================================
-      # *** MODIFIED STEP: Validate Delta against Sandbox (with details) ***
-      # ===================================================================
       - name: Validate Delta against Sandbox
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta_sandbox
@@ -517,7 +650,6 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          # Use '|| true' to capture output even on failure
           VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
@@ -533,12 +665,10 @@ jobs:
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
 
           if [ "$STATUS" -eq 0 ]; then
-            # SUCCESS
             echo "Validation successful."
             VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
-            # Print coverage details even on success
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
             LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
@@ -552,10 +682,8 @@ jobs:
             fi
             
           else
-            # FAILURE
             echo "Validation FAILED. Parsing results..."
             
-            # Check for test failures and coverage
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             
             if [ "$TEST_RESULT" != "null" ]; then
@@ -568,7 +696,7 @@ jobs:
               
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
+                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
                 echo "---------------------"
               fi
 
@@ -591,17 +719,15 @@ jobs:
               fi
             fi
             
-            # Check for component (compilation) failures
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
             
             exit 1 # Fail the job
           fi
-
       - name: Deploy Delta to Sandbox (Quick Deploy)
         if: steps.validate_delta_sandbox.outputs.validation_id
         run: |
@@ -612,19 +738,17 @@ jobs:
             --verbose
 
   # ========================================
-  # 3. THIRD JOB: Production Deployment
+  # 4. FOURTH JOB: Production Deployment
   # ========================================
   deploy_production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: staging_deployment
-    if: needs.staging_deployment.outputs.delta_exists == 'true'
+    needs: staging_deployment # <--- This remains correct
+    if: needs.staging_deployment.outputs.delta_exists == 'true' # <--- This remains correct
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
     steps:
-      # ... (checkout, setup-sfdx, auth, find_files steps are unchanged) ...
-
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -652,10 +776,6 @@ jobs:
           if [ ! -s salesforce-changes.txt ]; then
             echo "No Salesforce metadata changes detected. This is unexpected."
           fi
-
-      # =====================================================================
-      # *** MODIFIED STEP: Validate Delta against Production (with details) ***
-      # =====================================================================
       - name: Validate Delta against Production
         id: validate_delta_prod
         run: |
@@ -668,7 +788,6 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          # Use '|| true' to capture output even on failure
           VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org ProdOrg \
@@ -684,12 +803,10 @@ jobs:
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
 
           if [ "$STATUS" -eq 0 ]; then
-            # SUCCESS
             echo "Production validation successful."
             VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
-            # Print coverage details even on success
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
             LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
@@ -703,10 +820,8 @@ jobs:
             fi
             
           else
-            # FAILURE
             echo "Production validation FAILED. Parsing results..."
             
-            # Check for test failures and coverage
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             
             if [ "$TEST_RESULT" != "null" ]; then
@@ -719,7 +834,7 @@ jobs:
               
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
+                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
                 echo "---------------------"
               fi
 
@@ -742,17 +857,15 @@ jobs:
               fi
             fi
             
-            # Check for component (compilation) failures
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
             
             exit 1 # Fail the job
           fi
-
       - name: Deploy Delta to Production (Quick Deploy)
         if: steps.validate_delta_prod.outputs.validation_id
         run: |
