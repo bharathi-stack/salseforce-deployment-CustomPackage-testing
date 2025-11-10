@@ -439,20 +439,37 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - name: Install npm dependencies
         run: npm install
+
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
+
       - name: Force-update Salesforce CLI
         run: sf update
+
       - name: Run Prettier code format check
         run: npm run prettier:check
+
       - name: Run PMD code scan
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
+
+      - name: Run Code Analyzer
+        run: sf code-analyzer run --rule-selector AppExchange --rule-selector Recommended:Security --output-file CodeAnalyzerReport.html
+
+      - name: Upload Code Analyzer Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-analyzer-report
+          path: CodeAnalyzerReport.html
+          retention-days: 30
 
   # ========================================
   # 2. NEW JOB: Validate & Deploy to QA
