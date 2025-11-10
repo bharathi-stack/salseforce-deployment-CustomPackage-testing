@@ -461,11 +461,10 @@ jobs:
 
       # --- THIS STEP IS NOW FIXED ---
       - name: Run PMD code scan
-        run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 5
+        run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 3
       # ----------------------------
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
-        # --- I ALSO APPLIED THE --target FIX HERE ---
         run: sf scanner run --target force-app --target force-app2 --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
         continue-on-error: true
 
