@@ -434,7 +434,7 @@ jobs:
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
   validate_code:
-    name: 1. Validate Code (Prettier & PMD)
+    name:  Pre Validation
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -458,7 +458,7 @@ jobs:
   # 2. SECOND JOB: Validate & Deploy to Sandbox
   # ========================================
   staging_deployment:
-    name: 2. Validate & Deploy to Sandbox
+    name: Deploy to staging
     runs-on: ubuntu-latest
     needs: validate_code
     environment:
@@ -558,7 +558,7 @@ jobs:
   # 3. THIRD JOB: Production Deployment
   # ========================================
   deploy_production:
-    name: 3. Deploy to Production
+    name: Deploy to Production
     runs-on: ubuntu-latest
     needs: staging_deployment
     if: needs.staging_deployment.outputs.delta_exists == 'true'

@@ -1,4 +1,4 @@
-// testing_
+// testing
 @isTest
 private class OMathOperationsTest2 {
   @isTest
@@ -15,17 +15,17 @@ private class OMathOperationsTest2 {
     );
   }
 
-  // @isTest
-  // static void testAddFiveAndFive() {
-  //   Test.startTest();
-  //   Integer actualResult = OMathOperations2.addFiveAndFive();
-  //   Test.stopTest();
+  @isTest
+  static void testAddFiveAndFive() {
+    Test.startTest();
+    Integer actualResult = OMathOperations2.addFiveAndFive();
+    Test.stopTest();
 
-  //   Integer expectedResult = 10;
-  //   System.assertEquals(
-  //     expectedResult,
-  //     actualResult,
-  //     'The addition method should have returned 10.'
-  //   );
-  // }
+    Integer expectedResult = 10;
+    System.assertEquals(
+      expectedResult,
+      actualResult,
+      'The addition method should have returned 10.'
+    );
+  }
 }
