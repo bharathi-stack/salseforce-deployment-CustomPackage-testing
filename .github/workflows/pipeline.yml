@@ -449,24 +449,27 @@ jobs:
         run: npm install
 
       - name: Install Salesforce CLI
-        # This is the modern way, replacing sfdx-actions/setup-sfdx and sf update
         run: |
           npm install --global @salesforce/cli
           sf --version
+
+      # --- THIS IS THE NEW STEP ---
+      - name: Install Salesforce Scanner Plugin
+        run: sf plugins install @salesforce/sfdx-scanner
+      # ----------------------------
 
       - name: Run Prettier code format check
         run: npm run prettier:check
 
       - name: Run PMD code scan
-        # Standardized to use the new 'sf' command
         run: sf scanner run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
         run: sf scanner run --target "force-app,force-app2" --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
-        continue-on-error: true # You can keep this once it's working
+        continue-on-error: true
 
       - name: Upload Code Analyzer Report
-        if: always() # This correctly runs even if the previous step fails (due to continue-on-error)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: code-analyzer-report
