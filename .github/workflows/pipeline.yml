@@ -453,19 +453,20 @@ jobs:
           npm install --global @salesforce/cli
           sf --version
 
-      # --- THIS IS THE NEW STEP ---
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
-      # ----------------------------
 
       - name: Run Prettier code format check
         run: npm run prettier:check
 
+      # --- THIS STEP IS NOW FIXED ---
       - name: Run PMD code scan
-        run: sf scanner run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
+        run: sf scanner run --target force-app --target force-app2 --engine "pmd" --severity-threshold 5
+      # ----------------------------
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
-        run: sf scanner run --target "force-app,force-app2" --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
+        # --- I ALSO APPLIED THE --target FIX HERE ---
+        run: sf scanner run --target force-app --target force-app2 --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
         continue-on-error: true
 
       - name: Upload Code Analyzer Report
