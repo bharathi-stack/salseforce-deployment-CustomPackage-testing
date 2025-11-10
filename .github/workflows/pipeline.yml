@@ -123,7 +123,6 @@
 #             --wait 60 \
 #             --verbose
 
-
 # -----------------------------------------------------------------------------------------------
 # # not working with qa
 # name: Salesforce CI/CD Pipeline
@@ -224,24 +223,24 @@
 #           if [ "$STATUS" -eq 0 ]; then
 #             VALIDATION_ID=$(jq -r .result.id validation-result-qa.json)
 #             echo "Validation successful. Job ID: $VALIDATION_ID"
-#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 #           else
 #             echo "Validation failed."
 #             jq -r ".result | .message" validation-result-qa.json
 #             exit 1
 #           fi
-          
+
 #       # *** NEW STEP ADDED HERE ***
 #       # This step reads the JSON from the validation and fails the job if coverage is low.
 #       - name: Enforce 75% Code Coverage for QA
 #         if: steps.validate_delta_qa.outputs.validation_id
 #         run: |
 #           echo "Enforcing 75% code coverage requirement..."
-          
+
 #           # Get count of classes with coverage < 75%
 #           # This parses the 'apexCodeCoverage' array from the validation JSON
 #           LOW_COVERAGE_COUNT=$(jq '[.result.details.runTestResult.apexCodeCoverage[] | select((.percentage | sub("%"; "") | tonumber) < 75)] | length' validation-result-qa.json)
-          
+
 #           if [ "$LOW_COVERAGE_COUNT" -gt 0 ]; then
 #             echo "Error: $LOW_COVERAGE_COUNT Apex class(es) are below the 75% code coverage requirement."
 #             echo "Failing classes:"
@@ -329,7 +328,7 @@
 #           if [ "$STATUS" -eq 0 ]; then
 #             VALIDATION_ID=$(jq -r .result.id validation-result.json)
 #             echo "Validation successful. Job ID: $VALIDATION_ID"
-#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 #           else
 #             echo "Validation failed."
 #             jq -r ".result | .message" validation-result.json
@@ -407,7 +406,7 @@
 #           if [ "$STATUS" -eq 0 ]; then
 #             VALIDATION_ID=$(jq -r .result.id validation-result-prod.json)
 #             echo "Production validation successful. Job ID: $VALIDATION_ID"
-#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT 
+#             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 #           else
 #             echo "Production validation failed."
 #             jq -r ".result | .message" validation-result-prod.json
@@ -422,38 +421,8 @@
 #             --target-org ProdOrg \
 #             --verbose
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # -----------------------------------------------------------------------------------------------------------------
 
-# working flow without QA
 name: Salesforce CI/CD Pipeline
 on:
   push:
@@ -557,9 +526,23 @@ jobs:
             echo "Validation successful. Job ID: $VALIDATION_ID"
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
           else
-            echo "Validation failed."
-            jq -r ".result | .message" validation-result.json
+            # *** MODIFIED BLOCK ***
+            # This new else block provides detailed error messages
+            echo "::error::Salesforce validation failed on Sandbox. See details below."
+            
+            echo "--- Component Failures (Compile Errors) ---"
+            jq -r '.result.details.componentFailures[]? | "File: \(.fileName) | Line: \(.lineNumber) | Error: \(.problem)"' validation-result.json
+
+            echo "--- Test Failures ---"
+            jq -r '.result.details.runTestResult.failures[]? | "Class: \(.name) | Method: \(.methodName) | Error: \(.message) \nStack Trace: \(.stackTrace)\n"' validation-result.json
+
+            if ! jq -e '.result.details' validation-result.json > /dev/null; then
+              echo "--- Summary Message ---"
+              jq -r ".result.message" validation-result.json
+            fi
+
             exit 1
+            # *** END OF MODIFIED BLOCK ***
           fi
 
       - name: Deploy Delta to Sandbox (Quick Deploy)
@@ -612,9 +595,6 @@ jobs:
             echo "No Salesforce metadata changes detected. This is unexpected."
           fi
 
-      # *** MODIFICATION HERE ***
-      # Replaced the failing 'sf project deploy start' with the 'validate' and 'quick' commands.
-
       - name: Validate Delta against Production
         id: validate_delta_prod
         run: |
@@ -627,7 +607,6 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          # Run validation against Prod
           sf project deploy validate \
             $SOURCE_PATHS \
             --target-org ProdOrg \
@@ -646,13 +625,26 @@ jobs:
             echo "Production validation successful. Job ID: $VALIDATION_ID"
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
           else
-            echo "Production validation failed."
-            jq -r ".result | .message" validation-result-prod.json
+            # *** MODIFIED BLOCK ***
+            # This new else block provides detailed error messages
+            echo "::error::Salesforce validation failed on Production. See details below."
+            
+            echo "--- Component Failures (Compile Errors) ---"
+            jq -r '.result.details.componentFailures[]? | "File: \(.fileName) | Line: \(.lineNumber) | Error: \(.problem)"' validation-result-prod.json
+
+            echo "--- Test Failures ---"
+            jq -r '.result.details.runTestResult.failures[]? | "Class: \(.name) | Method: \(.methodName) | Error: \(.message) \nStack Trace: \(.stackTrace)\n"' validation-result-prod.json
+
+            if ! jq -e '.result.details' validation-result-prod.json > /dev/null; then
+              echo "--- Summary Message ---"
+              jq -r ".result.message" validation-result-prod.json
+            fi
+            
             exit 1
+            # *** END OF MODIFIED BLOCK ***
           fi
 
       - name: Deploy Delta to Production (Quick Deploy)
-        # This step only runs if the 'validate_delta_prod' step was successful
         if: steps.validate_delta_prod.outputs.validation_id
         run: |
           echo "Production validation complete. Proceeding with quick deploy to Production."
