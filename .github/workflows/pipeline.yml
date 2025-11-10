@@ -461,11 +461,8 @@ jobs:
         run: sfdx scanner:run --target "force-app,force-app2" --engine "pmd" --violations-cause-build-failure
 
       - name: Run Code Analyzer (AppExchange & Security Rules)
-        run: |
-          sf scanner run --target "force-app,force-app2" --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html || true
-          if [ ! -f CodeAnalyzerReport.html ]; then
-            echo "<html><body><h1>Code Analyzer Report</h1><p>No violations found.</p></body></html>" > CodeAnalyzerReport.html
-          fi
+        run: sf scanner run --target "force-app,force-app2" --category "AppExchange,Security" --outfile CodeAnalyzerReport.html --format html
+        continue-on-error: true
 
       - name: Upload Code Analyzer Report
         if: always()
