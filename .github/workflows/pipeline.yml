@@ -490,7 +490,7 @@ jobs:
   qa_deployment:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    needs: validate_code # Runs after pre-validation
+    needs: validate_code
     environment:
       name: qa
       url: ${{ steps.auth_org.outputs.org_url }}
@@ -500,7 +500,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for git diff
+          fetch-depth: 0
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
       - name: Force-update Salesforce CLI
@@ -531,6 +531,28 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # --- NEW STEP: Determine which tests to run ---
+      - name: Determine Test Strategy
+        if: steps.find_files.outputs.delta_exists == 'true'
+        id: test_strategy
+        run: |
+          echo "Analyzing changed files for test classes..."
+          # Find all changed files that look like test classes
+          CHANGED_TEST_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*Test.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//' | tr '\n' ',' | sed 's/,$//')
+
+          if [ -n "$CHANGED_TEST_CLASSES" ]; then
+            echo "New/changed test classes found: $CHANGED_TEST_CLASSES"
+            echo "Using RunSpecifiedTests."
+            echo "test_level=RunSpecifiedTests" >> $GITHUB_OUTPUT
+            echo "test_list=$CHANGED_TEST_CLASSES" >> $GITHUB_OUTPUT
+          else
+            echo "No new/changed test classes found."
+            echo "Using RunLocalTests."
+            echo "test_level=RunLocalTests" >> $GITHUB_OUTPUT
+            echo "test_list=" >> $GITHUB_OUTPUT
+          fi
+
+      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against QA Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -541,10 +563,18 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
+          # Build the dynamic test level command
+          TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
+          if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+          fi
+
+          echo "Validation command params: $TEST_LEVEL_PARAM"
+
           VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org QAOrg \
-            --test-level RunLocalTests \
+            $TEST_LEVEL_PARAM \
             --wait 60 \
             --verbose \
             --json) || true
@@ -559,7 +589,6 @@ jobs:
           # === A: Check for Compilation or General Test Failures ===
           if [ "$STATUS" -ne 0 ]; then
             echo "::error::Validation FAILED. Parsing results..."
-            
             if [ "$TEST_RESULT" != "null" ]; then
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
@@ -568,15 +597,13 @@ jobs:
                 echo "---------------------"
               fi
             fi
-            
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
               echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
-            
-            exit 1 # Fail the job
+            exit 1
           fi
 
           echo "Validation successful. Now checking code coverage..."
@@ -590,10 +617,9 @@ jobs:
             echo "--- Overall Code Coverage ---"
             echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
             echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
-            
             if [ "$COVERAGE_PERCENT" -lt 75 ]; then
               echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-              exit 1 # Fail the job
+              exit 1
             fi
             echo "Overall coverage check PASSED."
           else
@@ -604,7 +630,7 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
+          # This line is still correct: it filters out test classes from the check
           CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
@@ -617,15 +643,14 @@ jobs:
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
               
               if [ -z "$CLASS_COVERAGE_JSON" ]; then
-                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
-                PERCENT_VALUE=0 # Treat as 0% coverage
+                echo "WARNING: No coverage info found for '$CLASS_NAME'."
+                PERCENT_VALUE=0
               else
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
-              
               if [ "$PERCENT_VALUE" -lt 75 ]; then
                 echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
                 FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
@@ -659,8 +684,8 @@ jobs:
   staging_deployment:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: qa_deployment # Runs after QA
-    if: needs.qa_deployment.outputs.delta_exists == 'true' # Skip if QA had no changes
+    needs: qa_deployment
+    if: needs.qa_deployment.outputs.delta_exists == 'true'
     environment:
       name: sandbox
       url: ${{ steps.auth_org.outputs.org_url }}
@@ -701,6 +726,27 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # --- NEW STEP: Determine which tests to run ---
+      - name: Determine Test Strategy
+        if: steps.find_files.outputs.delta_exists == 'true'
+        id: test_strategy
+        run: |
+          echo "Analyzing changed files for test classes..."
+          CHANGED_TEST_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*Test.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//' | tr '\n' ',' | sed 's/,$//')
+
+          if [ -n "$CHANGED_TEST_CLASSES" ]; then
+            echo "New/changed test classes found: $CHANGED_TEST_CLASSES"
+            echo "Using RunSpecifiedTests."
+            echo "test_level=RunSpecifiedTests" >> $GITHUB_OUTPUT
+            echo "test_list=$CHANGED_TEST_CLASSES" >> $GITHUB_OUTPUT
+          else
+            echo "No new/changed test classes found."
+            echo "Using RunLocalTests."
+            echo "test_level=RunLocalTests" >> $GITHUB_OUTPUT
+            echo "test_list=" >> $GITHUB_OUTPUT
+          fi
+
+      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against Staging Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -711,10 +757,17 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
+          TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
+          if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+          fi
+
+          echo "Validation command params: $TEST_LEVEL_PARAM"
+
           VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
-            --test-level RunLocalTests \
+            $TEST_LEVEL_PARAM \
             --wait 60 \
             --verbose \
             --json) || true
@@ -729,7 +782,6 @@ jobs:
           # === A: Check for Compilation or General Test Failures ===
           if [ "$STATUS" -ne 0 ]; then
             echo "::error::Validation FAILED. Parsing results..."
-            
             if [ "$TEST_RESULT" != "null" ]; then
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
@@ -738,15 +790,13 @@ jobs:
                 echo "---------------------"
               fi
             fi
-            
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
               echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
-            
-            exit 1 # Fail the job
+            exit 1
           fi
 
           echo "Validation successful. Now checking code coverage..."
@@ -760,10 +810,9 @@ jobs:
             echo "--- Overall Code Coverage ---"
             echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
             echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
-            
             if [ "$COVERAGE_PERCENT" -lt 75 ]; then
               echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-              exit 1 # Fail the job
+              exit 1
             fi
             echo "Overall coverage check PASSED."
           else
@@ -774,7 +823,6 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
           CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
@@ -787,7 +835,7 @@ jobs:
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
               
               if [ -z "$CLASS_COVERAGE_JSON" ]; then
-                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
+                echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
@@ -795,7 +843,6 @@ jobs:
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
-              
               if [ "$PERCENT_VALUE" -lt 75 ]; then
                 echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
                 FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
@@ -829,8 +876,8 @@ jobs:
   deploy_production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: staging_deployment # Runs after Staging
-    if: needs.staging_deployment.outputs.delta_exists == 'true' # Skip if Staging had no changes
+    needs: staging_deployment
+    if: needs.staging_deployment.outputs.delta_exists == 'true'
     environment:
       name: production
       url: ${{ steps.auth_org.outputs.org_url }}
@@ -869,6 +916,28 @@ jobs:
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           fi
 
+      # --- NEW STEP: Determine which tests to run ---
+      - name: Determine Test Strategy
+        if: steps.find_files.outputs.delta_exists == 'true'
+        id: test_strategy
+        run: |
+          echo "Analyzing changed files for test classes..."
+          CHANGED_TEST_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*Test.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//' | tr '\n' ',' | sed 's/,$//')
+
+          if [ -n "$CHANGED_TEST_CLASSES" ]; then
+            echo "New/changed test classes found: $CHANGED_TEST_CLASSES"
+            echo "Using RunSpecifiedTests."
+            echo "test_level=RunSpecifiedTests" >> $GITHUB_OUTPUT
+            echo "test_list=$CHANGED_TEST_CLASSES" >> $GITHUB_OUTPUT
+          else
+            echo "No new/changed test classes found."
+            # For Production, we always fall back to RunLocalTests as a safe default
+            echo "Using RunLocalTests."
+            echo "test_level=RunLocalTests" >> $GITHUB_OUTPUT
+            echo "test_list=" >> $GITHUB_OUTPUT
+          fi
+
+      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against Production Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -879,10 +948,17 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
+          TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
+          if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+          fi
+
+          echo "Validation command params: $TEST_LEVEL_PARAM"
+
           VALIDATION_JSON=$(sf project deploy validate \
             $SOURCE_PATHS \
             --target-org ProdOrg \
-            --test-level RunLocalTests \
+            $TEST_LEVEL_PARAM \
             --wait 60 \
             --verbose \
             --json) || true
@@ -897,7 +973,6 @@ jobs:
           # === A: Check for Compilation or General Test Failures ===
           if [ "$STATUS" -ne 0 ]; then
             echo "::error::Validation FAILED. Parsing results..."
-            
             if [ "$TEST_RESULT" != "null" ]; then
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
@@ -906,15 +981,13 @@ jobs:
                 echo "---------------------"
               fi
             fi
-            
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
               echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
-            
-            exit 1 # Fail the job
+            exit 1
           fi
 
           echo "Validation successful. Now checking code coverage..."
@@ -928,10 +1001,9 @@ jobs:
             echo "--- Overall Code Coverage ---"
             echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
             echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
-            
             if [ "$COVERAGE_PERCENT" -lt 75 ]; then
               echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-              exit 1 # Fail the job
+              exit 1
             fi
             echo "Overall coverage check PASSED."
           else
@@ -942,7 +1014,6 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
           CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
@@ -955,7 +1026,7 @@ jobs:
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
               
               if [ -z "$CLASS_COVERAGE_JSON" ]; then
-                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
+                echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
@@ -963,7 +1034,6 @@ jobs:
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
-              
               if [ "$PERCENT_VALUE" -lt 75 ]; then
                 echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
                 FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
