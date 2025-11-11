@@ -448,10 +448,12 @@ jobs:
         run: npm install
 
       # ---
-      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
+      # --- Use manual npm install for Salesforce CLI ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce/setup-sf-cli@v1
+        run: |
+          npm install --global @salesforce/cli
+          sf --version
 
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
@@ -506,10 +508,12 @@ jobs:
           fetch-depth: 0 # IMPORTANT: Needed for the git diff
 
       # ---
-      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
+      # --- Use manual npm install for Salesforce CLI ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce/setup-sf-cli@v1
+        run: |
+          npm install --global @salesforce/cli
+          sf --version
 
       - name: Authenticate to QA Org
         id: auth_org
@@ -706,10 +710,12 @@ jobs:
           fetch-depth: 0
 
       # ---
-      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
+      # --- Use manual npm install for Salesforce CLI ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce/setup-sf-cli@v1
+        run: |
+          npm install --global @salesforce/cli
+          sf --version
 
       - name: Authenticate to Staging Org
         id: auth_org
@@ -904,10 +910,12 @@ jobs:
           fetch-depth: 0
 
       # ---
-      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
+      # --- Use manual npm install for Salesforce CLI ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce/setup-sf-cli@v1
+        run: |
+          npm install --global @salesforce/cli
+          sf --version
 
       - name: Authenticate to Production Org
         id: auth_org
@@ -999,7 +1007,7 @@ jobs:
               fi
             fi
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
-            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILV_JSON" | jq 'length')" -gt 0 ]; then
+            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
               echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
