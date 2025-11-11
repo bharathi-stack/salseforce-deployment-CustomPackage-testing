@@ -427,7 +427,7 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - dev
+      - release
 
 jobs:
   # ========================================
