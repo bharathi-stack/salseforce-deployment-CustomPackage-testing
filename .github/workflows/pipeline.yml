@@ -500,7 +500,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # IMPORTANT: Needed for the git diff
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
       - name: Force-update Salesforce CLI
@@ -515,8 +515,9 @@ jobs:
       - name: Find changed metadata files
         id: find_files
         run: |
-          echo "Finding changes between HEAD~1 and HEAD"
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          # Use github.event.before and github.sha to correctly handle pushes
+          echo "Finding changes between ${{ github.event.before }} and ${{ github.sha }}"
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
 
           echo "--- Salesforce changes ---"
@@ -531,13 +532,11 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      # --- NEW STEP: Determine which tests to run ---
       - name: Determine Test Strategy
         if: steps.find_files.outputs.delta_exists == 'true'
         id: test_strategy
         run: |
           echo "Analyzing changed files for test classes..."
-          # Find all changed files that look like test classes
           CHANGED_TEST_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*Test.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//' | tr '\n' ',' | sed 's/,$//')
 
           if [ -n "$CHANGED_TEST_CLASSES" ]; then
@@ -552,7 +551,6 @@ jobs:
             echo "test_list=" >> $GITHUB_OUTPUT
           fi
 
-      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against QA Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -563,7 +561,6 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          # Build the dynamic test level command
           TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
           if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
             TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
@@ -571,7 +568,11 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          VALIDATION_JSON=$(sf project deploy validate \
+          # ---
+          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # ---
+          VALIDATION_JSON=$(sf project deploy \
+            --dry-run \
             $SOURCE_PATHS \
             --target-org QAOrg \
             $TEST_LEVEL_PARAM \
@@ -630,14 +631,14 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # This line is still correct: it filters out test classes from the check
           CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            # The .codeCoverage array is in a different place on the `deploy` command
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -646,8 +647,16 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
-                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
+                # `deploy` reports coverage as a number 0-1, not a percentage string
+                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
+                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
+                
+                if [ "$LINES_TOTAL" -gt 0 ]; then
+                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
+                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
+                else
+                  PERCENT_VALUE=100 # No lines to test, so 100% covered
+                fi
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -666,6 +675,7 @@ jobs:
           echo "Individual coverage check PASSED."
           echo "All checks passed. Setting validation ID for quick deploy."
 
+          # `deploy --dry-run` still gives a Job ID for a quick deploy
           VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
           echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 
@@ -710,8 +720,8 @@ jobs:
       - name: Find changed metadata files
         id: find_files
         run: |
-          echo "Finding changes between HEAD~1 and HEAD"
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          echo "Finding changes between ${{ github.event.before }} and ${{ github.sha }}"
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
 
           echo "--- Salesforce changes ---"
@@ -726,7 +736,6 @@ jobs:
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      # --- NEW STEP: Determine which tests to run ---
       - name: Determine Test Strategy
         if: steps.find_files.outputs.delta_exists == 'true'
         id: test_strategy
@@ -746,7 +755,6 @@ jobs:
             echo "test_list=" >> $GITHUB_OUTPUT
           fi
 
-      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against Staging Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -764,7 +772,11 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          VALIDATION_JSON=$(sf project deploy validate \
+          # ---
+          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # ---
+          VALIDATION_JSON=$(sf project deploy \
+            --dry-run \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
             $TEST_LEVEL_PARAM \
@@ -829,7 +841,7 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -838,8 +850,15 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
-                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
+                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
+                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
+                
+                if [ "$LINES_TOTAL" -gt 0 ]; then
+                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
+                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
+                else
+                  PERCENT_VALUE=100
+                fi
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -900,8 +919,8 @@ jobs:
       - name: Find changed metadata files
         id: find_files
         run: |
-          echo "Finding changes between HEAD~1 and HEAD"
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          echo "Finding changes between ${{ github.event.before }} and ${{ github.sha }}"
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
 
           echo "--- Salesforce changes ---"
@@ -916,7 +935,6 @@ jobs:
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           fi
 
-      # --- NEW STEP: Determine which tests to run ---
       - name: Determine Test Strategy
         if: steps.find_files.outputs.delta_exists == 'true'
         id: test_strategy
@@ -931,13 +949,11 @@ jobs:
             echo "test_list=$CHANGED_TEST_CLASSES" >> $GITHUB_OUTPUT
           else
             echo "No new/changed test classes found."
-            # For Production, we always fall back to RunLocalTests as a safe default
             echo "Using RunLocalTests."
             echo "test_level=RunLocalTests" >> $GITHUB_OUTPUT
             echo "test_list=" >> $GITHUB_OUTPUT
           fi
 
-      # --- MODIFIED STEP: Use dynamic test level ---
       - name: Validate Delta against Production Org
         if: steps.find_files.outputs.delta_exists == 'true'
         id: validate_delta
@@ -955,7 +971,11 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          VALIDATION_JSON=$(sf project deploy validate \
+          # ---
+          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # ---
+          VALIDATION_JSON=$(sf project deploy \
+            --dry-run \
             $SOURCE_PATHS \
             --target-org ProdOrg \
             $TEST_LEVEL_PARAM \
@@ -982,7 +1002,7 @@ jobs:
               fi
             fi
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
-            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
+            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILV_JSON" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
               echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
@@ -1020,7 +1040,7 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -1029,8 +1049,15 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
-                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
+                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
+                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
+                
+                if [ "$LINES_TOTAL" -gt 0 ]; then
+                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
+                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
+                else
+                  PERCENT_VALUE=100
+                fi
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
