@@ -501,8 +501,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # IMPORTANT: Needed for the git diff
+
+      # ---
+      # --- THE FIX: Use the OFFICIAL salesforce/setup-sfdx action ---
+      # ---
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
+        uses: salesforce/setup-sfdx@v1
+        with:
+          sfdx-url: ${{ secrets.SFDX_QA_AUTH_URL }}
+
       - name: Force-update Salesforce CLI
         run: sf update
       - name: Authenticate to QA Org
@@ -568,9 +575,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # ---
-          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
-          # ---
+          # This stable sfdx command will now be recognized
           VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org QAOrg \
@@ -635,7 +640,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -645,7 +649,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
@@ -673,7 +676,6 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to QA Org."
-          # 'sfdx' uses a different quick deploy command
           sfdx force:project:deploy:quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org QAOrg
@@ -696,8 +698,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ---
+      # --- THE FIX: Use the OFFICIAL salesforce/setup-sfdx action ---
+      # ---
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
+        uses: salesforce/setup-sfdx@v1
+        with:
+          sfdx-url: ${{ secrets.SFDX_SANDBOX_AUTH_URL }}
+
       - name: Force-update Salesforce CLI
         run: sf update
       - name: Authenticate to Staging Org
@@ -762,9 +771,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # ---
-          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
-          # ---
+          # This stable sfdx command will now be recognized
           VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
@@ -829,7 +836,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -839,7 +845,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
@@ -887,8 +892,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ---
+      # --- THE FIX: Use the OFFICIAL salesforce/setup-sfdx action ---
+      # ---
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
+        uses: salesforce/setup-sfdx@v1
+        with:
+          sfdx-url: ${{ secrets.SFDX_PROD_AUTH_URL }}
+
       - name: Force-update Salesforce CLI
         run: sf update
       - name: Authenticate to Production Org
@@ -953,9 +965,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # ---
-          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
-          # ---
+          # This stable sfdx command will now be recognized
           VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org ProdOrg \
@@ -1020,7 +1030,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -1030,7 +1039,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
