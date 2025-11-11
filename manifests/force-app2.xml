@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>call1__c</members>
+        <members>sell1__c</members>
+        <members>layout__c</members>
+        <members>lists__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>MyCloudClass1</members>
+        <members>MyCloudClass2</members>
+        <name>ApexClass</name>
+    </types>
+    <version>59.0</version>
+</Package>
