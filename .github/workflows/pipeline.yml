@@ -569,8 +569,7 @@ jobs:
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
             LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            
-            echo "Test Result: $TEST_RESULT"
+
             echo "Total Lines: $TOTAL_LINES"
             echo "Lines Covered: $LINES_COVERED"
 
