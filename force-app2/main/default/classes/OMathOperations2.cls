@@ -1,4 +1,4 @@
-// testings
+// testing
 public class OMathOperations2 {
   /**
    * @description Multiplies 5 and 5 together.
