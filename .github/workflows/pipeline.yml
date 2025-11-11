@@ -427,14 +427,14 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - release
+      - dev
 
 jobs:
   # ========================================
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
   validate_code:
-    name: Pre Validation (Prettier & Scanner) # Renamed job
+    name: Pre Validation (Prettier & Scanner)
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -456,26 +456,20 @@ jobs:
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
 
-      # --- STEP 1: Run Prettier (Same as before) ---
       - name: Run Prettier code format check
         id: prettier_check
         run: npm run prettier:check
-        continue-on-error: true # Allows workflow to continue
+        continue-on-error: true
 
-      # --- STEP 2: COMBINED SCANNER STEP (This is the fix) ---
-      # This one command runs all default engines (including PMD)
-      # and saves ALL results to the HTML file.
       - name: Run Code Analyzer (PMD, Security, etc.)
-        id: scanner_run # Give it an ID
+        id: scanner_run
         run: |
           sf scanner run --target force-app --target force-app2 \
             --outfile CodeAnalyzerReport.html \
             --format html \
             --severity-threshold 2
-        continue-on-error: true # IMPORTANT: This lets the next step run
+        continue-on-error: true
 
-      # --- STEP 3: Upload Report (Same as before) ---
-      # This will now find the HTML file *with* all the PMD violations in it
       - name: Upload Code Analyzer Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -484,8 +478,6 @@ jobs:
           path: CodeAnalyzerReport.html
           retention-days: 30
 
-      # --- STEP 4: Check Results (Updated) ---
-      # This step now checks BOTH the prettier and scanner steps
       - name: Check Scan Results
         if: always()
         run: |
@@ -493,24 +485,23 @@ jobs:
             echo "::error::Prettier check failed."
           fi
 
-          # Check the outcome of our new scanner_run step
           if [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             echo "::error::Code Scanner found violations (severity 2+). See uploaded report."
           fi
 
-          # If EITHER step failed, fail the whole job
           if [ "${{ steps.prettier_check.outcome }}" == "failure" ] || [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             exit 1
           fi
+
   # ========================================
   # 2. NEW JOB: Validate & Deploy to QA
   # ========================================
   qa_deployment:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    needs: validate_code # <--- Runs after pre-validation
+    needs: validate_code
     environment:
-      name: qa # <--- Assumes you created a 'qa' environment in GitHub
+      name: qa
       url: ${{ steps.auth_qa.outputs.org_url }}
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
@@ -575,17 +566,69 @@ jobs:
             VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
+            # TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            # TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            # LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+
+            # echo "Total Lines: $TOTAL_LINES"
+            # echo "Lines Covered: $LINES_COVERED"
+
+            # if [ "$TOTAL_LINES" -gt 0 ]; then
+            #   echo "########################"
+            #   COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+            #   echo "--- Overall Code Coverage ---"
+            #   echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+            #   echo "COVERAGE: $COVERAGE_PERCENT%"
+            #   echo "-----------------------------"
+            # fi
+
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            
+            # Calculate overall coverage from codeCoverage array
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq '[.codeCoverage[]? | .numLocations] | add // 0')
+            LINES_NOT_COVERED=$(echo "$TEST_RESULT" | jq '[.codeCoverage[]? | .numLocationsNotCovered] | add // 0')
+            LINES_COVERED=$((TOTAL_LINES - LINES_NOT_COVERED))
+
+            echo "Test Result: $TEST_RESULT"
+            echo "Total Lines: $TOTAL_LINES"
+            echo "Lines Covered: $LINES_COVERED"
+
             if [ "$TOTAL_LINES" -gt 0 ]; then
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
+              echo "--- Overall Code Coverage ---"
               echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
               echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+              echo "-----------------------------"
             fi
+
+            # Check individual class coverage
+            echo "--- Checking Individual Class Coverage ---"
+            CHANGED_APEX=$(grep -E "\.cls$" salesforce-changes.txt | grep -v "Test\.cls$" || true)
+            
+            if [ -n "$CHANGED_APEX" ]; then
+              FAILED_CLASSES=""
+              while IFS= read -r apex_file; do
+                CLASS_NAME=$(basename "$apex_file" .cls)
+                CLASS_COVERAGE=$(echo "$TEST_RESULT" | jq -r --arg name "$CLASS_NAME" \
+                  '.codeCoverage[] | select(.name == $name) | 
+                  if .numLocations > 0 then ((.numLocationsNotCovered / .numLocations) * 100 | 100 - .) else 0 end')
+                
+                if [ -n "$CLASS_COVERAGE" ] && [ "$CLASS_COVERAGE" != "null" ]; then
+                  COVERAGE_INT=${CLASS_COVERAGE%.*}
+                  echo "Class: $CLASS_NAME - Coverage: ${COVERAGE_INT}%"
+                  
+                  if [ "$COVERAGE_INT" -lt 75 ]; then
+                    FAILED_CLASSES="$FAILED_CLASSES\n   - $CLASS_NAME: ${COVERAGE_INT}%"
+                  fi
+                fi
+              done <<< "$CHANGED_APEX"
+              
+              if [ -n "$FAILED_CLASSES" ]; then
+                echo "::error::The following classes have insufficient coverage (< 75%):"
+                echo -e "$FAILED_CLASSES"
+                exit 1
+              fi
+            fi
+            echo "------------------------------------------"
             
           else
             echo "Validation FAILED. Parsing results..."
@@ -632,7 +675,7 @@ jobs:
               echo "-----------------------------------------------"
             fi
             
-            exit 1 # Fail the job
+            exit 1
           fi
       - name: Deploy Delta to QA Org (Quick Deploy)
         if: steps.validate_delta_qa.outputs.validation_id
@@ -649,8 +692,8 @@ jobs:
   staging_deployment:
     name: Deploy to staging
     runs-on: ubuntu-latest
-    needs: qa_deployment # <--- MODIFIED: Now runs after the 'qa_deployment' job
-    if: needs.qa_deployment.outputs.delta_exists == 'true' # Ensures we skip if QA found no delta
+    needs: qa_deployment
+    if: needs.qa_deployment.outputs.delta_exists == 'true'
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
@@ -723,11 +766,41 @@ jobs:
             
             if [ "$TOTAL_LINES" -gt 0 ]; then
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
+              echo "--- Overall Code Coverage ---"
               echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
               echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+              echo "-----------------------------"
             fi
+
+            # Check individual class coverage
+            echo "--- Checking Individual Class Coverage ---"
+            CHANGED_APEX=$(grep -E "\.cls$" salesforce-changes.txt | grep -v "Test\.cls$" || true)
+            
+            if [ -n "$CHANGED_APEX" ]; then
+              FAILED_CLASSES=""
+              while IFS= read -r apex_file; do
+                CLASS_NAME=$(basename "$apex_file" .cls)
+                CLASS_COVERAGE=$(echo "$TEST_RESULT" | jq -r --arg name "$CLASS_NAME" \
+                  '.codeCoverage[] | select(.name == $name) | 
+                  if .numLocations > 0 then ((.numLocationsNotCovered / .numLocations) * 100 | 100 - .) else 0 end')
+                
+                if [ -n "$CLASS_COVERAGE" ] && [ "$CLASS_COVERAGE" != "null" ]; then
+                  COVERAGE_INT=${CLASS_COVERAGE%.*}
+                  echo "Class: $CLASS_NAME - Coverage: ${COVERAGE_INT}%"
+                  
+                  if [ "$COVERAGE_INT" -lt 75 ]; then
+                    FAILED_CLASSES="$FAILED_CLASSES\n   - $CLASS_NAME: ${COVERAGE_INT}%"
+                  fi
+                fi
+              done <<< "$CHANGED_APEX"
+              
+              if [ -n "$FAILED_CLASSES" ]; then
+                echo "::error::The following classes have insufficient coverage (< 75%):"
+                echo -e "$FAILED_CLASSES"
+                exit 1
+              fi
+            fi
+            echo "------------------------------------------"
             
           else
             echo "Validation FAILED. Parsing results..."
@@ -774,7 +847,7 @@ jobs:
               echo "-----------------------------------------------"
             fi
             
-            exit 1 # Fail the job
+            exit 1
           fi
       - name: Deploy Delta to Sandbox (Quick Deploy)
         if: steps.validate_delta_sandbox.outputs.validation_id
@@ -791,8 +864,8 @@ jobs:
   deploy_production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: staging_deployment # <--- This remains correct
-    if: needs.staging_deployment.outputs.delta_exists == 'true' # <--- This remains correct
+    needs: staging_deployment
+    if: needs.staging_deployment.outputs.delta_exists == 'true'
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
@@ -861,11 +934,41 @@ jobs:
             
             if [ "$TOTAL_LINES" -gt 0 ]; then
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
+              echo "--- Overall Code Coverage ---"
               echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
               echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+              echo "-----------------------------"
             fi
+
+            # Check individual class coverage
+            echo "--- Checking Individual Class Coverage ---"
+            CHANGED_APEX=$(grep -E "\.cls$" salesforce-changes.txt | grep -v "Test\.cls$" || true)
+            
+            if [ -n "$CHANGED_APEX" ]; then
+              FAILED_CLASSES=""
+              while IFS= read -r apex_file; do
+                CLASS_NAME=$(basename "$apex_file" .cls)
+                CLASS_COVERAGE=$(echo "$TEST_RESULT" | jq -r --arg name "$CLASS_NAME" \
+                  '.codeCoverage[] | select(.name == $name) | 
+                  if .numLocations > 0 then ((.numLocationsNotCovered / .numLocations) * 100 | 100 - .) else 0 end')
+                
+                if [ -n "$CLASS_COVERAGE" ] && [ "$CLASS_COVERAGE" != "null" ]; then
+                  COVERAGE_INT=${CLASS_COVERAGE%.*}
+                  echo "Class: $CLASS_NAME - Coverage: ${COVERAGE_INT}%"
+                  
+                  if [ "$COVERAGE_INT" -lt 75 ]; then
+                    FAILED_CLASSES="$FAILED_CLASSES\n   - $CLASS_NAME: ${COVERAGE_INT}%"
+                  fi
+                fi
+              done <<< "$CHANGED_APEX"
+              
+              if [ -n "$FAILED_CLASSES" ]; then
+                echo "::error::The following classes have insufficient coverage (< 75%):"
+                echo -e "$FAILED_CLASSES"
+                exit 1
+              fi
+            fi
+            echo "------------------------------------------"
             
           else
             echo "Production validation FAILED. Parsing results..."
@@ -912,7 +1015,7 @@ jobs:
               echo "-----------------------------------------------"
             fi
             
-            exit 1 # Fail the job
+            exit 1
           fi
       - name: Deploy Delta to Production (Quick Deploy)
         if: steps.validate_delta_prod.outputs.validation_id
