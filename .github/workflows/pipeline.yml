@@ -427,11 +427,12 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - release
+      - dev
+  workflow_dispatch: # Allows you to run it manually
 
 jobs:
   # ========================================
-  # 1. FIRST JOB: Initial Process (Validate Code)
+  # 1. Pre-Validation (Scanner/Lint)
   # ========================================
   validate_code:
     name: Pre Validation (Prettier & Scanner)
@@ -439,37 +440,30 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install npm dependencies
         run: npm install
-
       - name: Install Salesforce CLI
         run: |
           npm install --global @salesforce/cli
           sf --version
-
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
-
       - name: Run Prettier code format check
         id: prettier_check
         run: npm run prettier:check
-        continue-on-error: true # Allows workflow to continue
-
-      - name: Run Code Analyzer (PMD, Security, etc.)
-        id: scanner_run # Give it an ID
+        continue-on-error: true
+      - name: Run Code Analyzer (PMD, etc.)
+        id: scanner_run
         run: |
           sf scanner run --target force-app --target force-app2 \
             --outfile CodeAnalyzerReport.html \
             --format html \
             --severity-threshold 2
-        continue-on-error: true # IMPORTANT: This lets the next step run
-
+        continue-on-error: true
       - name: Upload Code Analyzer Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -477,49 +471,46 @@ jobs:
           name: code-analyzer-report
           path: CodeAnalyzerReport.html
           retention-days: 30
-
       - name: Check Scan Results
         if: always()
         run: |
           if [ "${{ steps.prettier_check.outcome }}" == "failure" ]; then
             echo "::error::Prettier check failed."
           fi
-
           if [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
-            echo "::error::Code Scanner found violations (severity 2+). See uploaded report."
+            echo "::error::Code Scanner found violations. See report."
           fi
-
           if [ "${{ steps.prettier_check.outcome }}" == "failure" ] || [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             exit 1
           fi
 
   # ========================================
-  # 2. NEW JOB: Validate & Deploy to QA
+  # 2. Deploy to QA
   # ========================================
   qa_deployment:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    needs: validate_code # <--- Runs after pre-validation
+    needs: validate_code # Runs after pre-validation
     environment:
-      name: qa # <--- Assumes you created a 'qa' environment in GitHub
-      url: ${{ steps.auth_qa.outputs.org_url }}
+      name: qa
+      url: ${{ steps.auth_org.outputs.org_url }}
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Needed for git diff
       - name: Install Salesforce CLI
         uses: sfdx-actions/setup-sfdx@v1
       - name: Force-update Salesforce CLI
         run: sf update
       - name: Authenticate to QA Org
-        id: auth_qa
+        id: auth_org
         run: |
           echo "${{ secrets.SFDX_QA_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a QAOrg -s
-          org_url=$(sfdx force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
+          sf auth sfdxurl store -f sfdx_auth_file.txt -a QAOrg -s
+          org_url=$(sf force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
       - name: Find changed metadata files
         id: find_files
@@ -527,9 +518,11 @@ jobs:
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+
           echo "--- Salesforce changes ---"
           cat salesforce-changes.txt
           echo "--------------------------"
+
           if [ -s salesforce-changes.txt ]; then
             echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
@@ -537,11 +530,12 @@ jobs:
             echo "No Salesforce metadata changes detected. Skipping validation."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
+
       - name: Validate Delta against QA Org
         if: steps.find_files.outputs.delta_exists == 'true'
-        id: validate_delta_qa
+        id: validate_delta
         run: |
-          echo "Validating delta changes against QA Org..."
+          echo "Validating delta changes against QAOrg..."
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
           if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
 
@@ -555,177 +549,123 @@ jobs:
             --verbose \
             --json) || true
             
-          echo "--- QA Validation Result JSON ---"
+          echo "--- Validation Result JSON (QA) ---"
           echo "$VALIDATION_JSON" | jq .
-          echo "---------------------------------"
+          echo "-----------------------------------"
 
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+          TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
 
-          if [ "$STATUS" -eq 0 ]; then
-            echo "Validation successful."
-            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            
-            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
-            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
-            OVERALL_COVERAGE_PASSED=true
-
-            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
-                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
-                echo "--- Overall Org Coverage (Average) ---"
-                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
-                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
-                
-                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
-                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
-                    OVERALL_COVERAGE_PASSED=false
-                else
-                    echo "Overall coverage check PASSED."
-                fi
-                echo "----------------------------------------"
-            else
-                echo "No lines found for overall coverage calculation."
-            fi
-
-            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
-            echo "--- Individual Class Coverage (Respective) ---"
-            
-            # Get just the Apex class files from the git diff (excluding Test classes), 
-            # then get the base class name without path or extension.
-            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
-                              grep -v -E 'Test\.cls$' | \
-                              sed 's_.*/__' | \
-                              sed 's/\.cls$//' | \
-                              uniq)
-
-            INDIVIDUAL_COVERAGE_PASSED=true
-            # Set individual threshold. Gautham suggested 90%, but 75% matches your overall rule.
-            MIN_INDIVIDUAL_COVERAGE=75 
-            
-            if [ -z "$CHANGED_CLASSES" ]; then
-                echo "No new/changed Apex classes found in this delta. Skipping individual check."
-            else
-                echo "Checking individual coverage for changed classes:"
-                echo "$CHANGED_CLASSES"
-                
-                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
-                
-                if [ "$COVERAGE_ARRAY" == "null" ]; then
-                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
-                   # If we have changed classes but no coverage array, that's a failure.
-                   INDIVIDUAL_COVERAGE_PASSED=false
-                   echo "::error::No code coverage data returned, but Apex classes were changed."
-                else
-                    for CLASS_NAME in $CHANGED_CLASSES; do
-                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
-                        
-                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
-                            # This is the 0% coverage case for a new class.
-                            # It was in the diff, but not in the coverage report.
-                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                            INDIVIDUAL_COVERAGE_PASSED=false
-                        else
-                            # The class was found in the report, let's check its numbers
-                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
-                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
-                            
-                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
-                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
-                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
-                                
-                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
-                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                                    INDIVIDUAL_COVERAGE_PASSED=false
-                                fi
-                            else
-                                # This class has 0 executable lines (e.g., interface, empty class)
-                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
-                            fi
-                        fi
-                    done
-                fi
-            fi
-            echo "----------------------------------------------"
-
-            # --- 3. FINAL VERDICT ---
-            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
-                echo "::error::One or more code coverage checks failed. See errors above."
-                exit 1
-            else
-                echo "All code coverage checks PASSED."
-            fi
-            
-          else
-            echo "Validation FAILED. Parsing results..."
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+          # === A: Check for Compilation or General Test Failures ===
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
-              
-              echo "--- Test Run Summary (Failure) ---"
-              echo "Total Tests Run: $NUM_TESTS"
-              echo "Total Failures: $NUM_FAILED"
-              
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
+                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
                 echo "---------------------"
-              fi
-
-              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-              
-              if [ "$TOTAL_LINES" -gt 0 ]; then
-                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-                echo "--- Code Coverage ---"
-                echo "Total Lines: $TOTAL_LINES"
-                echo "Lines Covered: $LINES_COVERED"
-                echo "COVERAGE: $COVERAGE_PERCENT%"
-                
-                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
-                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-                fi
-                echo "---------------------"
-              else
-                echo "No lines found for coverage calculation."
               fi
             fi
             
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
             
             exit 1 # Fail the job
           fi
+
+          echo "Validation successful. Now checking code coverage..."
+
+          # === B: Check Overall Code Coverage (Your 75% rule) ===
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+
+          if [ "$TOTAL_LINES" -gt 0 ]; then
+            COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+            echo "--- Overall Code Coverage ---"
+            echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+            echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
+            
+            if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+              echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+              exit 1 # Fail the job
+            fi
+            echo "Overall coverage check PASSED."
+          else
+            echo "No lines found for overall coverage calculation."
+          fi
+
+          # === C: Check Individual Class Coverage (Gautham's Recommendation) ===
+          echo "--- Checking Individual Class Coverage (Min 75%) ---"
+          FAILED_CLASSES=""
+
+          # Get just the names of the changed Apex classes (e.g., "MyClassName")
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+
+          if [ -z "$CHANGED_CLASSES" ]; then
+            echo "No changed Apex classes found. Skipping individual check."
+          else
+            echo "Changed classes to check: $CHANGED_CLASSES"
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            
+            for CLASS_NAME in $CHANGED_CLASSES; do
+              # Find this class in the JSON array
+              CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
+              
+              if [ -z "$CLASS_COVERAGE_JSON" ]; then
+                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
+                PERCENT_VALUE=0 # Treat as 0% coverage
+              else
+                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+              fi
+
+              echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
+              
+              # Check if this class is below the 75% threshold
+              if [ "$PERCENT_VALUE" -lt 75 ]; then
+                echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
+                FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
+              fi
+            done
+          fi
+
+          # Final check: if any individual classes failed, fail the job
+          if [ -n "$FAILED_CLASSES" ]; then
+            echo "::error::Individual code coverage check FAILED for: $FAILED_CLASSES"
+            exit 1
+          fi
+
+          echo "Individual coverage check PASSED."
+          echo "All checks passed. Setting validation ID for quick deploy."
+
+          VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
+          echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
+
       - name: Deploy Delta to QA Org (Quick Deploy)
-        if: steps.validate_delta_qa.outputs.validation_id
+        if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to QA Org."
           sf project deploy quick \
-            --job-id ${{ steps.validate_delta_qa.outputs.validation_id }} \
+            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org QAOrg \
             --verbose
 
   # ========================================
-  # 3. THIRD JOB: Validate & Deploy to Sandbox
+  # 3. Deploy to Staging
   # ========================================
   staging_deployment:
-    name: Deploy to staging
+    name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: qa_deployment # <--- MODIFIED: Now runs after the 'qa_deployment' job
-    if: needs.qa_deployment.outputs.delta_exists == 'true' # Ensures we skip if QA found no delta
+    needs: qa_deployment # Runs after QA
+    if: needs.qa_deployment.outputs.delta_exists == 'true' # Skip if QA had no changes
     environment:
       name: sandbox
-      url: ${{ steps.auth_sandbox.outputs.org_url }}
+      url: ${{ steps.auth_org.outputs.org_url }}
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
@@ -737,12 +677,12 @@ jobs:
         uses: sfdx-actions/setup-sfdx@v1
       - name: Force-update Salesforce CLI
         run: sf update
-      - name: Authenticate to Sandbox
-        id: auth_sandbox
+      - name: Authenticate to Staging Org
+        id: auth_org
         run: |
           echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
-          org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
+          sf auth sfdxurl store -f sfdx_auth_file.txt -a SandboxOrg -s
+          org_url=$(sf force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
       - name: Find changed metadata files
         id: find_files
@@ -750,9 +690,11 @@ jobs:
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+
           echo "--- Salesforce changes ---"
           cat salesforce-changes.txt
           echo "--------------------------"
+
           if [ -s salesforce-changes.txt ]; then
             echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
@@ -760,11 +702,12 @@ jobs:
             echo "No Salesforce metadata changes detected. Skipping validation."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
-      - name: Validate Delta against Sandbox
+
+      - name: Validate Delta against Staging Org
         if: steps.find_files.outputs.delta_exists == 'true'
-        id: validate_delta_sandbox
+        id: validate_delta
         run: |
-          echo "Validating delta changes against Sandbox..."
+          echo "Validating delta changes against SandboxOrg..."
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
           if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
 
@@ -778,169 +721,119 @@ jobs:
             --verbose \
             --json) || true
             
-          echo "--- Sandbox Validation Result JSON ---"
+          echo "--- Validation Result JSON (Staging) ---"
           echo "$VALIDATION_JSON" | jq .
-          echo "--------------------------------------"
+          echo "----------------------------------------"
 
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+          TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
 
-          if [ "$STATUS" -eq 0 ]; then
-            echo "Validation successful."
-            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            
-            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
-            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
-            OVERALL_COVERAGE_PASSED=true
-
-            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
-                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
-                echo "--- Overall Org Coverage (Average) ---"
-                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
-                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
-                
-                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
-                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
-                    OVERALL_COVERAGE_PASSED=false
-                else
-                    echo "Overall coverage check PASSED."
-                fi
-                echo "----------------------------------------"
-            else
-                echo "No lines found for overall coverage calculation."
-            fi
-
-            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
-            echo "--- Individual Class Coverage (Respective) ---"
-            
-            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
-                              grep -v -E 'Test\.cls$' | \
-                              sed 's_.*/__' | \
-                              sed 's/\.cls$//' | \
-                              uniq)
-
-            INDIVIDUAL_COVERAGE_PASSED=true
-            MIN_INDIVIDUAL_COVERAGE=75 
-            
-            if [ -z "$CHANGED_CLASSES" ]; then
-                echo "No new/changed Apex classes found in this delta. Skipping individual check."
-            else
-                echo "Checking individual coverage for changed classes:"
-                echo "$CHANGED_CLASSES"
-                
-                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
-                
-                if [ "$COVERAGE_ARRAY" == "null" ]; then
-                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
-                   INDIVIDUAL_COVERAGE_PASSED=false
-                   echo "::error::No code coverage data returned, but Apex classes were changed."
-                else
-                    for CLASS_NAME in $CHANGED_CLASSES; do
-                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
-                        
-                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
-                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                            INDIVIDUAL_COVERAGE_PASSED=false
-                        else
-                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
-                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
-                            
-                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
-                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
-                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
-                                
-                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
-                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                                    INDIVIDUAL_COVERAGE_PASSED=false
-                                fi
-                            else
-                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
-                            fi
-                        fi
-                    done
-                fi
-            fi
-            echo "----------------------------------------------"
-
-            # --- 3. FINAL VERDICT ---
-            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
-                echo "::error::One or more code coverage checks failed. See errors above."
-                exit 1
-            else
-                echo "All code coverage checks PASSED."
-            fi
-            
-          else
-            echo "Validation FAILED. Parsing results..."
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+          # === A: Check for Compilation or General Test Failures ===
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
-              
-              echo "--- Test Run Summary (Failure) ---"
-              echo "Total Tests Run: $NUM_TESTS"
-              echo "Total Failures: $NUM_FAILED"
-              
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
+                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
                 echo "---------------------"
-              fi
-
-              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-              
-              if [ "$TOTAL_LINES" -gt 0 ]; then
-                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-                echo "--- Code Coverage ---"
-                echo "Total Lines: $TOTAL_LINES"
-                echo "Lines Covered: $LINES_COVERED"
-                echo "COVERAGE: $COVERAGE_PERCENT%"
-                
-                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
-                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-                fi
-                echo "---------------------"
-              else
-                echo "No lines found for coverage calculation."
               fi
             fi
             
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
             
             exit 1 # Fail the job
           fi
-      - name: Deploy Delta to Sandbox (Quick Deploy)
-        if: steps.validate_delta_sandbox.outputs.validation_id
+
+          echo "Validation successful. Now checking code coverage..."
+
+          # === B: Check Overall Code Coverage (Your 75% rule) ===
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+
+          if [ "$TOTAL_LINES" -gt 0 ]; then
+            COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+            echo "--- Overall Code Coverage ---"
+            echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+            echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
+            
+            if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+              echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+              exit 1 # Fail the job
+            fi
+            echo "Overall coverage check PASSED."
+          else
+            echo "No lines found for overall coverage calculation."
+          fi
+
+          # === C: Check Individual Class Coverage (Gautham's Recommendation) ===
+          echo "--- Checking Individual Class Coverage (Min 75%) ---"
+          FAILED_CLASSES=""
+
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+
+          if [ -z "$CHANGED_CLASSES" ]; then
+            echo "No changed Apex classes found. Skipping individual check."
+          else
+            echo "Changed classes to check: $CHANGED_CLASSES"
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            
+            for CLASS_NAME in $CHANGED_CLASSES; do
+              CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
+              
+              if [ -z "$CLASS_COVERAGE_JSON" ]; then
+                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
+                PERCENT_VALUE=0
+              else
+                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+              fi
+
+              echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
+              
+              if [ "$PERCENT_VALUE" -lt 75 ]; then
+                echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
+                FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
+              fi
+            done
+          fi
+
+          if [ -n "$FAILED_CLASSES" ]; then
+            echo "::error::Individual code coverage check FAILED for: $FAILED_CLASSES"
+            exit 1
+          fi
+
+          echo "Individual coverage check PASSED."
+          echo "All checks passed. Setting validation ID for quick deploy."
+
+          VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
+          echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
+
+      - name: Deploy Delta to Staging Org (Quick Deploy)
+        if: steps.validate_delta.outputs.validation_id
         run: |
-          echo "Validation complete. Proceeding with quick deploy to Sandbox."
+          echo "Validation complete. Proceeding with quick deploy to Staging Org."
           sf project deploy quick \
-            --job-id ${{ steps.validate_delta_sandbox.outputs.validation_id }} \
+            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org SandboxOrg \
             --verbose
 
   # ========================================
-  # 4. FOURTH JOB: Production Deployment
+  # 4. Deploy to Production
   # ========================================
   deploy_production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: staging_deployment # <--- This remains correct
-    if: needs.staging_deployment.outputs.delta_exists == 'true' # <--- This remains correct
+    needs: staging_deployment # Runs after Staging
+    if: needs.staging_deployment.outputs.delta_exists == 'true' # Skip if Staging had no changes
     environment:
       name: production
-      url: ${{ steps.auth_prod.outputs.org_url }}
+      url: ${{ steps.auth_org.outputs.org_url }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -950,34 +843,39 @@ jobs:
         uses: sfdx-actions/setup-sfdx@v1
       - name: Force-update Salesforce CLI
         run: sf update
-      - name: Authenticate to Production
-        id: auth_prod
+      - name: Authenticate to Production Org
+        id: auth_org
         run: |
           echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
-          org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
+          sf auth sfdxurl store -f sfdx_auth_file.txt -a ProdOrg -s
+          org_url=$(sf force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
-      - name: Find changed metadata files for Prod
-        id: find_files_prod
+      - name: Find changed metadata files
+        id: find_files
         run: |
           echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
-          echo "--- Salesforce changes to deploy ---"
+
+          echo "--- Salesforce changes ---"
           cat salesforce-changes.txt
-          echo "------------------------------------"
+          echo "--------------------------"
+
           if [ ! -s salesforce-changes.txt ]; then
-            echo "No Salesforce metadata changes detected. This is unexpected."
+            # This job should not run if there are no files, but as a safeguard:
+            echo "No Salesforce metadata changes detected. Skipping."
+            echo "delta_exists=false" >> $GITHUB_OUTPUT
+            exit 0 # Exit successfully
           fi
-      - name: Validate Delta against Production
-        id: validate_delta_prod
+          echo "delta_exists=true" >> $GITHUB_OUTPUT
+
+      - name: Validate Delta against Production Org
+        if: steps.find_files.outputs.delta_exists == 'true'
+        id: validate_delta
         run: |
-          echo "Validating delta changes against Production..."
+          echo "Validating delta changes against ProdOrg..."
           SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-          if [ -z "$SOURCE_PATHS" ]; then
-            echo "No paths to validate. This is unexpected as the job should have been skipped."
-            exit 1
-          fi
+          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
 
           echo "Validating paths: $SOURCE_PATHS"
 
@@ -988,155 +886,105 @@ jobs:
             --wait 60 \
             --verbose \
             --json) || true
-
-          echo "--- Production Validation Result JSON ---"
+            
+          echo "--- Validation Result JSON (Production) ---"
           echo "$VALIDATION_JSON" | jq .
-          echo "-----------------------------------------"
+          echo "-------------------------------------------"
 
           STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
+          TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
 
-          if [ "$STATUS" -eq 0 ]; then
-            echo "Production validation successful."
-            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            
-            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
-            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
-            OVERALL_COVERAGE_PASSED=true
-
-            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
-                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
-                echo "--- Overall Org Coverage (Average) ---"
-                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
-                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
-                
-                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
-                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
-                    OVERALL_COVERAGE_PASSED=false
-                else
-                    echo "Overall coverage check PASSED."
-                fi
-                echo "----------------------------------------"
-            else
-                echo "No lines found for overall coverage calculation."
-            fi
-
-            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
-            echo "--- Individual Class Coverage (Respective) ---"
-            
-            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
-                              grep -v -E 'Test\.cls$' | \
-                              sed 's_.*/__' | \
-                              sed 's/\.cls$//' | \
-                              uniq)
-
-            INDIVIDUAL_COVERAGE_PASSED=true
-            MIN_INDIVIDUAL_COVERAGE=75 
-            
-            if [ -z "$CHANGED_CLASSES" ]; then
-                echo "No new/changed Apex classes found in this delta. Skipping individual check."
-            else
-                echo "Checking individual coverage for changed classes:"
-                echo "$CHANGED_CLASSES"
-                
-                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
-                
-                if [ "$COVERAGE_ARRAY" == "null" ]; then
-                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
-                   INDIVIDUAL_COVERAGE_PASSED=false
-                   echo "::error::No code coverage data returned, but Apex classes were changed."
-                else
-                    for CLASS_NAME in $CHANGED_CLASSES; do
-                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
-                        
-                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
-                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                            INDIVIDUAL_COVERAGE_PASSED=false
-                        else
-                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
-                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
-                            
-                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
-                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
-                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
-                                
-                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
-                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
-                                    INDIVIDUAL_COVERAGE_PASSED=false
-                                fi
-                            else
-                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
-                            fi
-                        fi
-                    done
-                fi
-            fi
-            echo "----------------------------------------------"
-
-            # --- 3. FINAL VERDICT ---
-            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
-                echo "::error::One or more code coverage checks failed. See errors above."
-                exit 1
-            else
-                echo "All code coverage checks PASSED."
-            fi
-            
-          else
-            echo "Production validation FAILED. Parsing results..."
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+          # === A: Check for Compilation or General Test Failures ===
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
               NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
-              
-              echo "--- Test Run Summary (Failure) ---"
-              echo "Total Tests Run: $NUM_TESTS"
-              echo "Total Failures: $NUM_FAILED"
-              
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
+                echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
                 echo "---------------------"
-              fi
-
-              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-              
-              if [ "$TOTAL_LINES" -gt 0 ]; then
-                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-                echo "--- Code Coverage ---"
-                echo "Total Lines: $TOTAL_LINES"
-                echo "Lines Covered: $LINES_COVERED"
-                echo "COVERAGE: $COVERAGE_PERCENT%"
-                
-                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
-                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-                fi
-                echo "---------------------"
-              else
-                echo "No lines found for coverage calculation."
               fi
             fi
             
             COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
             if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
               echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
+              echo "$COMP_FAILURES" | jq -r '.[] | "  - \(.problemType): \(.fileName) - \(.problem)"'
               echo "-----------------------------------------------"
             fi
             
             exit 1 # Fail the job
           fi
-      - name: Deploy Delta to Production (Quick Deploy)
-        if: steps.validate_delta_prod.outputs.validation_id
+
+          echo "Validation successful. Now checking code coverage..."
+
+          # === B: Check Overall Code Coverage (Your 75% rule) ===
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+
+          if [ "$TOTAL_LINES" -gt 0 ]; then
+            COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+            echo "--- Overall Code Coverage ---"
+            echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+            echo "OVERALL COVERAGE: $COVERAGE_PERCENT%"
+            
+            if [ "$COVERAGE_PERCENT" -lt 75 ]; then
+              echo "::error::Overall code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
+              exit 1 # Fail the job
+            fi
+            echo "Overall coverage check PASSED."
+          else
+            echo "No lines found for overall coverage calculation."
+          fi
+
+          # === C: Check Individual Class Coverage (Gautham's Recommendation) ===
+          echo "--- Checking Individual Class Coverage (Min 75%) ---"
+          FAILED_CLASSES=""
+
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+
+          if [ -z "$CHANGED_CLASSES" ]; then
+            echo "No changed Apex classes found. Skipping individual check."
+          else
+            echo "Changed classes to check: $CHANGED_CLASSES"
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
+            
+            for CLASS_NAME in $CHANGED_CLASSES; do
+              CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
+              
+              if [ -z "$CLASS_COVERAGE_JSON" ]; then
+                echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
+                PERCENT_VALUE=0
+              else
+                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+              fi
+
+              echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
+              
+              if [ "$PERCENT_VALUE" -lt 75 ]; then
+                echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
+                FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
+              fi
+            done
+          fi
+
+          if [ -n "$FAILED_CLASSES" ]; then
+            echo "::error::Individual code coverage check FAILED for: $FAILED_CLASSES"
+            exit 1
+          fi
+
+          echo "Individual coverage check PASSED."
+          echo "All checks passed. Setting validation ID for quick deploy."
+
+          VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
+          echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
+
+      - name: Deploy Delta to Production Org (Quick Deploy)
+        if: steps.validate_delta.outputs.validation_id
         run: |
-          echo "Production validation complete. Proceeding with quick deploy to Production."
+          echo "Validation complete. Proceeding with quick deploy to Production Org."
           sf project deploy quick \
-            --job-id ${{ steps.validate_delta_prod.outputs.validation_id }} \
+            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org ProdOrg \
             --verbose
