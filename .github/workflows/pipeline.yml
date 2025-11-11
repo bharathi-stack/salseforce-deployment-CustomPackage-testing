@@ -427,7 +427,7 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - dev
+      - release
   workflow_dispatch: # Allows you to run it manually
 
 jobs:
@@ -561,7 +561,7 @@ jobs:
             echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
                 echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
@@ -582,7 +582,6 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          # --- FIX 1: Use `// 0` to default null values to 0 ---
           TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
           LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
@@ -605,8 +604,8 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX 2: Exclude Test classes from the check ---
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "No changed Apex classes (non-test) found. Skipping individual check."
@@ -621,7 +620,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0 # Treat as 0% coverage
               else
-                # --- FIX 1 (Continued): Default null percentage to "0%" ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
@@ -733,7 +731,7 @@ jobs:
             echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
                 echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
@@ -754,7 +752,6 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          # --- FIX 1: Use `// 0` to default null values to 0 ---
           TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
           LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
@@ -777,8 +774,8 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX 2: Exclude Test classes from the check ---
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "No changed Apex classes (non-test) found. Skipping individual check."
@@ -793,7 +790,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0
               else
-                # --- FIX 1 (Continued): Default null percentage to "0%" ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
@@ -903,7 +899,7 @@ jobs:
             echo "::error::Validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests ---"
                 echo "$TEST_RESULT" | jq -r '.failures[] | "  - \(.name): \(.message)"'
@@ -924,7 +920,6 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          # --- FIX 1: Use `// 0` to default null values to 0 ---
           TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
           LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
@@ -947,8 +942,8 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # --- FIX 2: Exclude Test classes from the check ---
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX: Use "Test.*\.cls$" to filter *all* test class variations ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "Test.*\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
             echo "No changed Apex classes (non-test) found. Skipping individual check."
@@ -963,7 +958,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0
               else
-                # --- FIX 1 (Continued): Default null percentage to "0%" ---
                 PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
                 PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
