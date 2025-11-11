@@ -566,15 +566,33 @@ jobs:
             VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            # TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            # TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            # LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
 
+            # echo "Total Lines: $TOTAL_LINES"
+            # echo "Lines Covered: $LINES_COVERED"
+
+            # if [ "$TOTAL_LINES" -gt 0 ]; then
+            #   echo "########################"
+            #   COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
+            #   echo "--- Overall Code Coverage ---"
+            #   echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
+            #   echo "COVERAGE: $COVERAGE_PERCENT%"
+            #   echo "-----------------------------"
+            # fi
+
+            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
+            # Calculate overall coverage from codeCoverage array
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq '[.codeCoverage[]? | .numLocations] | add // 0')
+            LINES_NOT_COVERED=$(echo "$TEST_RESULT" | jq '[.codeCoverage[]? | .numLocationsNotCovered] | add // 0')
+            LINES_COVERED=$((TOTAL_LINES - LINES_NOT_COVERED))
+
+            echo "Test Result: $TEST_RESULT"
             echo "Total Lines: $TOTAL_LINES"
             echo "Lines Covered: $LINES_COVERED"
 
             if [ "$TOTAL_LINES" -gt 0 ]; then
-              echo "########################"
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
               echo "--- Overall Code Coverage ---"
               echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
