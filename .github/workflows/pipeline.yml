@@ -515,7 +515,6 @@ jobs:
       - name: Find changed metadata files
         id: find_files
         run: |
-          # Use github.event.before and github.sha to correctly handle pushes
           echo "Finding changes between ${{ github.event.before }} and ${{ github.sha }}"
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed-files.txt
           grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
@@ -563,21 +562,20 @@ jobs:
 
           TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
           if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
-            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+            # 'sfdx' uses -r for tests, not --tests
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM -r ${{ steps.test_strategy.outputs.test_list }}"
           fi
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
           # ---
-          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
           # ---
-          VALIDATION_JSON=$(sf project deploy \
-            --dry-run \
+          VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org QAOrg \
             $TEST_LEVEL_PARAM \
             --wait 60 \
-            --verbose \
             --json) || true
             
           echo "--- Validation Result JSON (QA) ---"
@@ -637,8 +635,8 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # The .codeCoverage array is in a different place on the `deploy` command
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
+            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -647,16 +645,9 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # `deploy` reports coverage as a number 0-1, not a percentage string
-                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
-                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
-                
-                if [ "$LINES_TOTAL" -gt 0 ]; then
-                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
-                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
-                else
-                  PERCENT_VALUE=100 # No lines to test, so 100% covered
-                fi
+                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -675,7 +666,6 @@ jobs:
           echo "Individual coverage check PASSED."
           echo "All checks passed. Setting validation ID for quick deploy."
 
-          # `deploy --dry-run` still gives a Job ID for a quick deploy
           VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
           echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
 
@@ -683,10 +673,10 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to QA Org."
-          sf project deploy quick \
+          # 'sfdx' uses a different quick deploy command
+          sfdx force:project:deploy:quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
-            --target-org QAOrg \
-            --verbose
+            --target-org QAOrg
 
   # ========================================
   # 3. Deploy to Staging
@@ -767,21 +757,19 @@ jobs:
 
           TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
           if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
-            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM -r ${{ steps.test_strategy.outputs.test_list }}"
           fi
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
           # ---
-          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
           # ---
-          VALIDATION_JSON=$(sf project deploy \
-            --dry-run \
+          VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
             $TEST_LEVEL_PARAM \
             --wait 60 \
-            --verbose \
             --json) || true
             
           echo "--- Validation Result JSON (Staging) ---"
@@ -841,7 +829,8 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
+            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -850,15 +839,9 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
-                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
-                
-                if [ "$LINES_TOTAL" -gt 0 ]; then
-                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
-                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
-                else
-                  PERCENT_VALUE=100
-                fi
+                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -884,10 +867,9 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to Staging Org."
-          sf project deploy quick \
+          sfdx force:project:deploy:quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
-            --target-org SandboxOrg \
-            --verbose
+            --target-org SandboxOrg
 
   # ========================================
   # 4. Deploy to Production
@@ -966,21 +948,19 @@ jobs:
 
           TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
           if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
-            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
+            TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM -r ${{ steps.test_strategy.outputs.test_list }}"
           fi
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
           # ---
-          # --- THE FIX: Use "deploy --dry-run" instead of "validate" ---
+          # --- THE FIX: Revert to "sfdx force:project:deploy --dryrun" ---
           # ---
-          VALIDATION_JSON=$(sf project deploy \
-            --dry-run \
+          VALIDATION_JSON=$(sfdx force:project:deploy --dryrun \
             $SOURCE_PATHS \
             --target-org ProdOrg \
             $TEST_LEVEL_PARAM \
             --wait 60 \
-            --verbose \
             --json) || true
             
           echo "--- Validation Result JSON (Production) ---"
@@ -1040,7 +1020,8 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
+            # --- THE FIX: Revert to ".codeCoverage" path for sfdx JSON ---
+            COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
@@ -1049,15 +1030,9 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
-                LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
-                
-                if [ "$LINES_TOTAL" -gt 0 ]; then
-                  LINES_COVERED=$((LINES_TOTAL - LINES_UNCOVERED))
-                  PERCENT_VALUE=$((100 * LINES_COVERED / LINES_TOTAL))
-                else
-                  PERCENT_VALUE=100
-                fi
+                # --- THE FIX: Revert to parsing percentage string from sfdx JSON ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -1083,7 +1058,6 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to Production Org."
-          sf project deploy quick \
+          sfdx force:project:deploy:quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
-            --target-org ProdOrg \
-            --verbose
+            --target-org ProdOrg
