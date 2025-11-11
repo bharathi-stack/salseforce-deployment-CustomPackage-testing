@@ -22,7 +22,6 @@ public class OMathOperations2 {
     return result;
   }
 }
-// testing from dev-B
 
 // // testingsss - Now with PMD Violations
 // global class OMathOperations2 { // VIOLATION: AvoidGlobalModifier (Severity 3)
