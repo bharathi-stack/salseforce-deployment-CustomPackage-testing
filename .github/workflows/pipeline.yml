@@ -446,11 +446,13 @@ jobs:
           node-version: "20"
       - name: Install npm dependencies
         run: npm install
+
       # ---
-      # --- Use the official salesforce-actions/setup-cli action ---
+      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce-actions/setup-cli@v1
+        uses: salesforce/setup-sf-cli@v1
+
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
       - name: Run Prettier code format check
@@ -504,10 +506,10 @@ jobs:
           fetch-depth: 0 # IMPORTANT: Needed for the git diff
 
       # ---
-      # --- THE FIX: Use the OFFICIAL salesforce-actions/setup-cli action ---
+      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce-actions/setup-cli@v1
+        uses: salesforce/setup-sf-cli@v1
 
       - name: Authenticate to QA Org
         id: auth_org
@@ -564,7 +566,6 @@ jobs:
 
           echo "Validating paths: $SOURCE_PATHS"
 
-          # --- THE FIX: Use modern `sf` syntax ---
           TEST_LEVEL_PARAM="--test-level ${{ steps.test_strategy.outputs.test_level }}"
           if [ "${{ steps.test_strategy.outputs.test_level }}" == "RunSpecifiedTests" ]; then
             TEST_LEVEL_PARAM="$TEST_LEVEL_PARAM --tests ${{ steps.test_strategy.outputs.test_list }}"
@@ -572,7 +573,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # --- THE FIX: Use modern, reliable `sf project deploy --dry-run` ---
+          # This command will now be found and will work reliably
           VALIDATION_JSON=$(sf project deploy --dry-run \
             $SOURCE_PATHS \
             --target-org QAOrg \
@@ -638,7 +639,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Use modern `sf` JSON path ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -648,7 +648,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Use modern `sf` JSON calculation ---
                 LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
                 LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
                 
@@ -683,7 +682,6 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to QA Org."
-          # --- THE FIX: Use modern `sf` quick deploy ---
           sf project deploy quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org QAOrg
@@ -708,10 +706,10 @@ jobs:
           fetch-depth: 0
 
       # ---
-      # --- THE FIX: Use the OFFICIAL salesforce-actions/setup-cli action ---
+      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce-actions/setup-cli@v1
+        uses: salesforce/setup-sf-cli@v1
 
       - name: Authenticate to Staging Org
         id: auth_org
@@ -775,7 +773,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # --- THE FIX: Use modern, reliable `sf project deploy --dry-run` ---
+          # This command will now be found and will work reliably
           VALIDATION_JSON=$(sf project deploy --dry-run \
             $SOURCE_PATHS \
             --target-org SandboxOrg \
@@ -841,7 +839,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Use modern `sf` JSON path ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -851,7 +848,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Use modern `sf` JSON calculation ---
                 LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
                 LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
                 
@@ -886,7 +882,6 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to Staging Org."
-          # --- THE FIX: Use modern `sf` quick deploy ---
           sf project deploy quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org SandboxOrg
@@ -909,10 +904,10 @@ jobs:
           fetch-depth: 0
 
       # ---
-      # --- THE FIX: Use the OFFICIAL salesforce-actions/setup-cli action ---
+      # --- THE REAL FIX: Use the official salesforce/setup-sf-cli action ---
       # ---
       - name: Install Salesforce CLI
-        uses: salesforce-actions/setup-cli@v1
+        uses: salesforce/setup-sf-cli@v1
 
       - name: Authenticate to Production Org
         id: auth_org
@@ -976,7 +971,7 @@ jobs:
 
           echo "Validation command params: $TEST_LEVEL_PARAM"
 
-          # --- THE FIX: Use modern, reliable `sf project deploy --dry-run` ---
+          # This command will now be found and will work reliably
           VALIDATION_JSON=$(sf project deploy --dry-run \
             $SOURCE_PATHS \
             --target-org ProdOrg \
@@ -1042,7 +1037,6 @@ jobs:
             echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
-            # --- THE FIX: Use modern `sf` JSON path ---
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.coverage.coverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
@@ -1052,7 +1046,6 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'."
                 PERCENT_VALUE=0
               else
-                # --- THE FIX: Use modern `sf` JSON calculation ---
                 LINES_UNCOVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.uncoveredLines | length')
                 LINES_TOTAL=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.totalLines')
                 
@@ -1087,7 +1080,6 @@ jobs:
         if: steps.validate_delta.outputs.validation_id
         run: |
           echo "Validation complete. Proceeding with quick deploy to Production Org."
-          # --- THE FIX: Use modern `sf` quick deploy ---
           sf project deploy quick \
             --job-id ${{ steps.validate_delta.outputs.validation_id }} \
             --target-org ProdOrg
