@@ -434,7 +434,7 @@ jobs:
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
   validate_code:
-    name: Pre Validation (Prettier & Scanner) # Renamed job
+    name: Pre Validation (Prettier & Scanner)
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -456,15 +456,11 @@ jobs:
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
 
-      # --- STEP 1: Run Prettier (Same as before) ---
       - name: Run Prettier code format check
         id: prettier_check
         run: npm run prettier:check
         continue-on-error: true # Allows workflow to continue
 
-      # --- STEP 2: COMBINED SCANNER STEP (This is the fix) ---
-      # This one command runs all default engines (including PMD)
-      # and saves ALL results to the HTML file.
       - name: Run Code Analyzer (PMD, Security, etc.)
         id: scanner_run # Give it an ID
         run: |
@@ -474,8 +470,6 @@ jobs:
             --severity-threshold 2
         continue-on-error: true # IMPORTANT: This lets the next step run
 
-      # --- STEP 3: Upload Report (Same as before) ---
-      # This will now find the HTML file *with* all the PMD violations in it
       - name: Upload Code Analyzer Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -484,8 +478,6 @@ jobs:
           path: CodeAnalyzerReport.html
           retention-days: 30
 
-      # --- STEP 4: Check Results (Updated) ---
-      # This step now checks BOTH the prettier and scanner steps
       - name: Check Scan Results
         if: always()
         run: |
@@ -493,15 +485,14 @@ jobs:
             echo "::error::Prettier check failed."
           fi
 
-          # Check the outcome of our new scanner_run step
           if [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             echo "::error::Code Scanner found violations (severity 2+). See uploaded report."
           fi
 
-          # If EITHER step failed, fail the whole job
           if [ "${{ steps.prettier_check.outcome }}" == "failure" ] || [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             exit 1
           fi
+
   # ========================================
   # 2. NEW JOB: Validate & Deploy to QA
   # ========================================
@@ -576,15 +567,96 @@ jobs:
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
             
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
-              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
-              echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
+            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
+            OVERALL_COVERAGE_PASSED=true
+
+            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
+                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
+                echo "--- Overall Org Coverage (Average) ---"
+                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
+                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
+                
+                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
+                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
+                    OVERALL_COVERAGE_PASSED=false
+                else
+                    echo "Overall coverage check PASSED."
+                fi
+                echo "----------------------------------------"
+            else
+                echo "No lines found for overall coverage calculation."
+            fi
+
+            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
+            echo "--- Individual Class Coverage (Respective) ---"
+            
+            # Get just the Apex class files from the git diff (excluding Test classes), 
+            # then get the base class name without path or extension.
+            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
+                              grep -v -E 'Test\.cls$' | \
+                              sed 's_.*/__' | \
+                              sed 's/\.cls$//' | \
+                              uniq)
+
+            INDIVIDUAL_COVERAGE_PASSED=true
+            # Set individual threshold. Gautham suggested 90%, but 75% matches your overall rule.
+            MIN_INDIVIDUAL_COVERAGE=75 
+            
+            if [ -z "$CHANGED_CLASSES" ]; then
+                echo "No new/changed Apex classes found in this delta. Skipping individual check."
+            else
+                echo "Checking individual coverage for changed classes:"
+                echo "$CHANGED_CLASSES"
+                
+                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
+                
+                if [ "$COVERAGE_ARRAY" == "null" ]; then
+                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
+                   # If we have changed classes but no coverage array, that's a failure.
+                   INDIVIDUAL_COVERAGE_PASSED=false
+                   echo "::error::No code coverage data returned, but Apex classes were changed."
+                else
+                    for CLASS_NAME in $CHANGED_CLASSES; do
+                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
+                        
+                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
+                            # This is the 0% coverage case for a new class.
+                            # It was in the diff, but not in the coverage report.
+                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                            INDIVIDUAL_COVERAGE_PASSED=false
+                        else
+                            # The class was found in the report, let's check its numbers
+                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
+                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
+                            
+                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
+                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
+                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
+                                
+                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
+                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                                    INDIVIDUAL_COVERAGE_PASSED=false
+                                fi
+                            else
+                                # This class has 0 executable lines (e.g., interface, empty class)
+                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
+                            fi
+                        fi
+                    done
+                fi
+            fi
+            echo "----------------------------------------------"
+
+            # --- 3. FINAL VERDICT ---
+            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
+                echo "::error::One or more code coverage checks failed. See errors above."
+                exit 1
+            else
+                echo "All code coverage checks PASSED."
             fi
             
           else
@@ -718,15 +790,88 @@ jobs:
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
             
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
-              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
-              echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
+            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
+            OVERALL_COVERAGE_PASSED=true
+
+            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
+                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
+                echo "--- Overall Org Coverage (Average) ---"
+                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
+                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
+                
+                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
+                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
+                    OVERALL_COVERAGE_PASSED=false
+                else
+                    echo "Overall coverage check PASSED."
+                fi
+                echo "----------------------------------------"
+            else
+                echo "No lines found for overall coverage calculation."
+            fi
+
+            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
+            echo "--- Individual Class Coverage (Respective) ---"
+            
+            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
+                              grep -v -E 'Test\.cls$' | \
+                              sed 's_.*/__' | \
+                              sed 's/\.cls$//' | \
+                              uniq)
+
+            INDIVIDUAL_COVERAGE_PASSED=true
+            MIN_INDIVIDUAL_COVERAGE=75 
+            
+            if [ -z "$CHANGED_CLASSES" ]; then
+                echo "No new/changed Apex classes found in this delta. Skipping individual check."
+            else
+                echo "Checking individual coverage for changed classes:"
+                echo "$CHANGED_CLASSES"
+                
+                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
+                
+                if [ "$COVERAGE_ARRAY" == "null" ]; then
+                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
+                   INDIVIDUAL_COVERAGE_PASSED=false
+                   echo "::error::No code coverage data returned, but Apex classes were changed."
+                else
+                    for CLASS_NAME in $CHANGED_CLASSES; do
+                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
+                        
+                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
+                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                            INDIVIDUAL_COVERAGE_PASSED=false
+                        else
+                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
+                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
+                            
+                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
+                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
+                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
+                                
+                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
+                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                                    INDIVIDUAL_COVERAGE_PASSED=false
+                                fi
+                            else
+                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
+                            fi
+                        fi
+                    done
+                fi
+            fi
+            echo "----------------------------------------------"
+
+            # --- 3. FINAL VERDICT ---
+            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
+                echo "::error::One or more code coverage checks failed. See errors above."
+                exit 1
+            else
+                echo "All code coverage checks PASSED."
             fi
             
           else
@@ -856,15 +1001,88 @@ jobs:
             echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
             
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
             
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
-              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
-              echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
+            # --- 1. GAUTHAM'S CHECK: OVERALL ORG COVERAGE (Average) ---
+            TOTAL_LINES_OVERALL=$(echo "$TEST_RESULT" | jq -r .totalLines)
+            LINES_COVERED_OVERALL=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            MIN_OVERALL_COVERAGE=75 # Your 75% rule for the whole org
+            OVERALL_COVERAGE_PASSED=true
+
+            if [ "$TOTAL_LINES_OVERALL" -gt 0 ]; then
+                COVERAGE_PERCENT_OVERALL=$((100 * LINES_COVERED_OVERALL / TOTAL_LINES_OVERALL))
+                echo "--- Overall Org Coverage (Average) ---"
+                echo "Lines Covered: $LINES_COVERED_OVERALL / $TOTAL_LINES_OVERALL"
+                echo "OVERALL COVERAGE: $COVERAGE_PERCENT_OVERALL%"
+                
+                if [ "$COVERAGE_PERCENT_OVERALL" -lt $MIN_OVERALL_COVERAGE ]; then
+                    echo "::error::OVERALL code coverage is $COVERAGE_PERCENT_OVERALL%. Minimum required is $MIN_OVERALL_COVERAGE%."
+                    OVERALL_COVERAGE_PASSED=false
+                else
+                    echo "Overall coverage check PASSED."
+                fi
+                echo "----------------------------------------"
+            else
+                echo "No lines found for overall coverage calculation."
+            fi
+
+            # --- 2. GAUTHAM'S CHECK: INDIVIDUAL CLASS COVERAGE (Respective) ---
+            echo "--- Individual Class Coverage (Respective) ---"
+            
+            CHANGED_CLASSES=$(grep 'force-app.*\.cls$' salesforce-changes.txt | \
+                              grep -v -E 'Test\.cls$' | \
+                              sed 's_.*/__' | \
+                              sed 's/\.cls$//' | \
+                              uniq)
+
+            INDIVIDUAL_COVERAGE_PASSED=true
+            MIN_INDIVIDUAL_COVERAGE=75 
+            
+            if [ -z "$CHANGED_CLASSES" ]; then
+                echo "No new/changed Apex classes found in this delta. Skipping individual check."
+            else
+                echo "Checking individual coverage for changed classes:"
+                echo "$CHANGED_CLASSES"
+                
+                COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq .codeCoverage)
+                
+                if [ "$COVERAGE_ARRAY" == "null" ]; then
+                   echo "WARNING: Code coverage array is null. This can happen if no tests ran."
+                   INDIVIDUAL_COVERAGE_PASSED=false
+                   echo "::error::No code coverage data returned, but Apex classes were changed."
+                else
+                    for CLASS_NAME in $CHANGED_CLASSES; do
+                        CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg cn "$CLASS_NAME" '.[] | select(.name == $cn)')
+                        
+                        if [ -z "$CLASS_COVERAGE_JSON" ] || [ "$CLASS_COVERAGE_JSON" == "null" ]; then
+                            echo "::error::INDIVIDUAL coverage for '$CLASS_NAME' is 0%. No test coverage found. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                            INDIVIDUAL_COVERAGE_PASSED=false
+                        else
+                            CLASS_TOTAL_LINES=$(echo "$CLASS_COVERAGE_JSON" | jq -r .totalLines)
+                            CLASS_LINES_COVERED=$(echo "$CLASS_COVERAGE_JSON" | jq -r .linesCovered)
+                            
+                            if [ "$CLASS_TOTAL_LINES" -gt 0 ]; then
+                                CLASS_PERCENT=$((100 * CLASS_LINES_COVERED / CLASS_TOTAL_LINES))
+                                echo "   - $CLASS_NAME Coverage: $CLASS_PERCENT% ($CLASS_LINES_COVERED / $CLASS_TOTAL_LINES lines)"
+                                
+                                if [ "$CLASS_PERCENT" -lt $MIN_INDIVIDUAL_COVERAGE ]; then
+                                    echo "::error::INDIVIDUAL coverage for $CLASS_NAME is $CLASS_PERCENT%. Minimum required is $MIN_INDIVIDUAL_COVERAGE%."
+                                    INDIVIDUAL_COVERAGE_PASSED=false
+                                fi
+                            else
+                                echo "   - $CLASS_NAME has 0 executable lines. Skipping check."
+                            fi
+                        fi
+                    done
+                fi
+            fi
+            echo "----------------------------------------------"
+
+            # --- 3. FINAL VERDICT ---
+            if [ "$OVERALL_COVERAGE_PASSED" = false ] || [ "$INDIVIDUAL_COVERAGE_PASSED" = false ]; then
+                echo "::error::One or more code coverage checks failed. See errors above."
+                exit 1
+            else
+                echo "All code coverage checks PASSED."
             fi
             
           else
