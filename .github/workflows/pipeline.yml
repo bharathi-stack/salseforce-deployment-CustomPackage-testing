@@ -427,7 +427,7 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - dev
+      - release
   workflow_dispatch: # Allows you to run it manually
 
 jobs:
@@ -582,8 +582,9 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+          # --- FIX 1: Use `// 0` to default null values to 0 ---
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
           if [ "$TOTAL_LINES" -gt 0 ]; then
             COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
@@ -604,29 +605,29 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          # Get just the names of the changed Apex classes (e.g., "MyClassName")
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX 2: Exclude Test classes from the check ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
-            echo "No changed Apex classes found. Skipping individual check."
+            echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
             
             for CLASS_NAME in $CHANGED_CLASSES; do
-              # Find this class in the JSON array
               CLASS_COVERAGE_JSON=$(echo "$COVERAGE_ARRAY" | jq -r --arg name "$CLASS_NAME" '.[] | select(.name == $name)')
               
               if [ -z "$CLASS_COVERAGE_JSON" ]; then
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0 # Treat as 0% coverage
               else
-                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+                # --- FIX 1 (Continued): Default null percentage to "0%" ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
               
-              # Check if this class is below the 75% threshold
               if [ "$PERCENT_VALUE" -lt 75 ]; then
                 echo "::error::FAILURE: Class '$CLASS_NAME' has $PERCENT_VALUE% coverage. Minimum required is 75%."
                 FAILED_CLASSES="$FAILED_CLASSES $CLASS_NAME"
@@ -634,7 +635,6 @@ jobs:
             done
           fi
 
-          # Final check: if any individual classes failed, fail the job
           if [ -n "$FAILED_CLASSES" ]; then
             echo "::error::Individual code coverage check FAILED for: $FAILED_CLASSES"
             exit 1
@@ -754,8 +754,9 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+          # --- FIX 1: Use `// 0` to default null values to 0 ---
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
           if [ "$TOTAL_LINES" -gt 0 ]; then
             COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
@@ -776,10 +777,11 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX 2: Exclude Test classes from the check ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
-            echo "No changed Apex classes found. Skipping individual check."
+            echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
@@ -791,7 +793,9 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0
               else
-                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+                # --- FIX 1 (Continued): Default null percentage to "0%" ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
@@ -862,12 +866,12 @@ jobs:
           echo "--------------------------"
 
           if [ ! -s salesforce-changes.txt ]; then
-            # This job should not run if there are no files, but as a safeguard:
             echo "No Salesforce metadata changes detected. Skipping."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
-            exit 0 # Exit successfully
+          else
+            echo "Salesforce changes detected."
+            echo "delta_exists=true" >> $GITHUB_OUTPUT
           fi
-          echo "delta_exists=true" >> $GITHUB_OUTPUT
 
       - name: Validate Delta against Production Org
         if: steps.find_files.outputs.delta_exists == 'true'
@@ -920,8 +924,9 @@ jobs:
           echo "Validation successful. Now checking code coverage..."
 
           # === B: Check Overall Code Coverage (Your 75% rule) ===
-          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+          # --- FIX 1: Use `// 0` to default null values to 0 ---
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
 
           if [ "$TOTAL_LINES" -gt 0 ]; then
             COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
@@ -942,10 +947,11 @@ jobs:
           echo "--- Checking Individual Class Coverage (Min 75%) ---"
           FAILED_CLASSES=""
 
-          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | sed 's_.*/__' | sed 's/\.cls//')
+          # --- FIX 2: Exclude Test classes from the check ---
+          CHANGED_CLASSES=$(grep -E "(force-app/|force-app2/).*/classes/.*\.cls$" salesforce-changes.txt | grep -v -E "(Test|Tests)\.cls$" | sed 's_.*/__' | sed 's/\.cls//')
 
           if [ -z "$CHANGED_CLASSES" ]; then
-            echo "No changed Apex classes found. Skipping individual check."
+            echo "No changed Apex classes (non-test) found. Skipping individual check."
           else
             echo "Changed classes to check: $CHANGED_CLASSES"
             COVERAGE_ARRAY=$(echo "$TEST_RESULT" | jq -r '.codeCoverage | @json')
@@ -957,7 +963,9 @@ jobs:
                 echo "WARNING: No coverage info found for '$CLASS_NAME'. It may be a new class with no tests."
                 PERCENT_VALUE=0
               else
-                PERCENT_VALUE=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage' | sed 's/%//')
+                # --- FIX 1 (Continued): Default null percentage to "0%" ---
+                PERCENT_STRING=$(echo "$CLASS_COVERAGE_JSON" | jq -r '.percentage // "0%"')
+                PERCENT_VALUE=$(echo "$PERCENT_STRING" | sed 's/%//')
               fi
 
               echo "Checking '$CLASS_NAME': $PERCENT_VALUE%"
