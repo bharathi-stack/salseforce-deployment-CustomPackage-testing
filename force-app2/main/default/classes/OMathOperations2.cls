@@ -1,28 +1,53 @@
-// testings
+// 80% COVER
 public class OMathOperations2 {
-  /**
-   * @description Multiplies 5 and 5 together.
-   * @return Integer The product of 5 * 5.
-   */
   public static Integer mulFiveAndFive() {
-    Integer a = 5;
-    Integer b = 5;
-    Integer result = a * b;
-    return result;
+    return 5 * 5; // 1 line
   }
 
-  /**
-   * @description Adds 5 and 5 together.
-   * @return Integer The sum of 5 + 5.
-   */
   public static Integer addFiveAndFive() {
-    Integer a = 5;
-    Integer b = 5;
-    Integer result = a + b;
-    return result;
+    return 5 + 5; // 1 line
+  }
+
+  public static Integer subFiveAndFive() {
+    return 5 - 5; // 1 line
+  }
+
+  public static Integer divFiveAndFive() {
+    return 5 / 5; // 1 line
+  }
+
+  public static Integer modFiveAndFive() {
+    return Math.mod(5, 5); // 1 line
   }
 }
-// hi
+
+// CORRECT CODE
+// // testings
+// public class OMathOperations2 {
+//   /**
+//    * @description Multiplies 5 and 5 together.
+//    * @return Integer The product of 5 * 5.
+//    */
+//   public static Integer mulFiveAndFive() {
+//     Integer a = 5;
+//     Integer b = 5;
+//     Integer result = a * b;
+//     return result;
+//   }
+
+//   /**
+//    * @description Adds 5 and 5 together.
+//    * @return Integer The sum of 5 + 5.
+//    */
+//   public static Integer addFiveAndFive() {
+//     Integer a = 5;
+//     Integer b = 5;
+//     Integer result = a + b;
+//     return result;
+//   }
+// }
+
+// VIOLATIONS
 // // testingsss - Now with PMD Violations
 // global class OMathOperations2 { // VIOLATION: AvoidGlobalModifier (Severity 3)
 //   /**
