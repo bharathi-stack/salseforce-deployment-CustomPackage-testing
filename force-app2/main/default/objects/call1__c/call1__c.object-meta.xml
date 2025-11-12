@@ -155,7 +155,7 @@
     <externalSharingModel>Private</externalSharingModel>
     <label>call1</label>
     <nameField>
-        <label>call1 Name</label>
+        <label>call2 Name</label>
         <type>Text</type>
     </nameField>
     <pluralLabel>call1</pluralLabel>
