@@ -616,7 +616,7 @@ jobs:
   # 1. FIRST JOB: Initial Process (Validate Code)
   # ========================================
   validate_code:
-    name: Pre Validation (Prettier & Scanner) # Renamed job
+    name: Pre Validation (Prettier & Scanner)
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -638,15 +638,11 @@ jobs:
       - name: Install Salesforce Scanner Plugin
         run: sf plugins install @salesforce/sfdx-scanner
 
-      # --- STEP 1: Run Prettier (Same as before) ---
       - name: Run Prettier code format check
         id: prettier_check
         run: npm run prettier:check
         continue-on-error: true # Allows workflow to continue
 
-      # --- STEP 2: COMBINED SCANNER STEP (This is the fix) ---
-      # This one command runs all default engines (including PMD)
-      # and saves ALL results to the HTML file.
       - name: Run Code Analyzer (PMD, Security, etc.)
         id: scanner_run # Give it an ID
         run: |
@@ -656,8 +652,6 @@ jobs:
             --severity-threshold 2
         continue-on-error: true # IMPORTANT: This lets the next step run
 
-      # --- STEP 3: Upload Report (Same as before) ---
-      # This will now find the HTML file *with* all the PMD violations in it
       - name: Upload Code Analyzer Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -666,8 +660,6 @@ jobs:
           path: CodeAnalyzerReport.html
           retention-days: 30
 
-      # --- STEP 4: Check Results (Updated) ---
-      # This step now checks BOTH the prettier and scanner steps
       - name: Check Scan Results
         if: always()
         run: |
@@ -675,15 +667,14 @@ jobs:
             echo "::error::Prettier check failed."
           fi
 
-          # Check the outcome of our new scanner_run step
           if [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             echo "::error::Code Scanner found violations (severity 2+). See uploaded report."
           fi
 
-          # If EITHER step failed, fail the whole job
           if [ "${{ steps.prettier_check.outcome }}" == "failure" ] || [ "${{ steps.scanner_run.outcome }}" == "failure" ]; then
             exit 1
           fi
+
   # ========================================
   # 2. NEW JOB: Validate & Deploy to QA
   # ========================================
@@ -722,33 +713,23 @@ jobs:
         id: check_org_coverage
         run: |
           echo "Fetching overall Apex test coverage from QA org..."
-
-          # Run all tests to get current coverage
           TEST_RESULT=$(sf apex run test \
             --target-org QAOrg \
             --code-coverage \
             --result-format json \
             --wait 30 \
             --json) || true
-
           echo "Test result: $TEST_RESULT"
-
-          # Extract overall org coverage percentage
           ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
-
           echo "Current QA org-wide Apex coverage: ${ORG_COVERAGE}%"
-
-          # Validate coverage is at least 90%
           if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
             echo "Error: Could not retrieve org-wide coverage"
             exit 1
           fi
-
           if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
             echo "ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
             exit 1
           fi
-
           echo "✓ QA org meets the 90% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
@@ -814,36 +795,24 @@ jobs:
         if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "Checking test coverage from validation results..."
-
-          # Get detailed validation report
           DEPLOY_REPORT=$(sf project deploy report \
             --job-id ${{ steps.validate.outputs.job-id }} \
             --target-org QAOrg \
             --json)
-
           echo "Deploy report: $DEPLOY_REPORT"
-
-          # Extract test coverage percentage
           VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.numberTestsCompleted / .result.numberTestsTotal * 100' 2>/dev/null || echo "0")
-
-          # Try alternative method to get coverage
           if [ "$VALIDATION_COVERAGE" = "0" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
             VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.details.runTestResult.codeCoverage[] | select(.name != null) | .coveredLines / (.coveredLines + .uncoveredLines) * 100' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
           fi
-
           echo "Validation test coverage: ${VALIDATION_COVERAGE}%"
-
-          # Validate coverage is more than 75%
           if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
             echo "Warning: Could not retrieve validation coverage, proceeding with caution"
             VALIDATION_COVERAGE=0
           fi
-
           if (( $(echo "$VALIDATION_COVERAGE <= 75" | bc -l) )); then
             echo "ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is at or below the required 75% threshold"
             exit 1
           fi
-
           echo "✓ Validation meets the 75% test coverage requirement"
           echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
 
@@ -852,16 +821,11 @@ jobs:
         if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "Verifying combined coverage of existing and new Apex classes..."
-
-          # Get list of all Apex classes in the org after validation
           APEX_CLASSES=$(sf apex list class \
             --target-org QAOrg \
             --json | jq -r '.result[].FullName')
-
           echo "Found Apex classes in org:"
           echo "$APEX_CLASSES"
-
-          # Run tests again to get updated coverage including new classes
           echo "Running tests to verify combined coverage..."
           COMBINED_TEST_RESULT=$(sf apex run test \
             --target-org QAOrg \
@@ -869,26 +833,18 @@ jobs:
             --result-format json \
             --wait 30 \
             --json) || true
-
           echo "Combined test result: $COMBINED_TEST_RESULT"
-
-          # Extract combined coverage
           COMBINED_COVERAGE=$(echo $COMBINED_TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
-
           echo "Combined Apex coverage (existing + new): ${COMBINED_COVERAGE}%"
-
-          # Validate combined coverage is at least 90%
           if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ]; then
             echo "Error: Could not retrieve combined coverage"
             exit 1
           fi
-
           if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
             echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
             echo "The new deployment would bring overall org coverage below 90%"
             exit 1
           fi
-
           echo "✓ Combined coverage meets the 90% requirement"
           echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
 
@@ -910,37 +866,69 @@ jobs:
   # 3. THIRD JOB: Validate & Deploy to Sandbox
   # ========================================
   staging_deployment:
-    name: Deploy to staging
+    name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: qa_deployment # <--- MODIFIED: Now runs after the 'qa_deployment' job
-    if: needs.qa_deployment.outputs.delta_exists == 'true' # Ensures we skip if QA found no delta
+    needs: qa_deployment # <--- Runs after QA
+    if: needs.qa_deployment.outputs.delta_exists == 'true' # <--- Skips if QA found no delta
     environment:
       name: sandbox
       url: ${{ steps.auth_sandbox.outputs.org_url }}
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
-      - name: Check out code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
-      - name: Force-update Salesforce CLI
-        run: sf update
-      - name: Authenticate to Sandbox
+        run: |
+          npm install -g @salesforce/cli
+
+      - name: Install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Authenticate to Sandbox Org
         id: auth_sandbox
         run: |
-          echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a SandboxOrg -s
-          org_url=$(sfdx force:org:display -u SandboxOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "${{ secrets.SFDX_SANDBOX_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias SandboxOrg --set-default
+          org_url=$(sf org display --target-org SandboxOrg --json | jq -r .result.instanceUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
+
+      - name: Check Overall Apex Coverage in Sandbox Org
+        id: check_org_coverage
+        run: |
+          echo "Fetching overall Apex test coverage from Sandbox org..."
+          TEST_RESULT=$(sf apex run test \
+            --target-org SandboxOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json) || true
+          echo "Test result: $TEST_RESULT"
+          ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
+          echo "Current Sandbox org-wide Apex coverage: ${ORG_COVERAGE}%"
+          if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
+            echo "Error: Could not retrieve org-wide coverage"
+            exit 1
+          fi
+          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: Sandbox org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+            exit 1
+          fi
+          echo "✓ Sandbox org meets the 90% coverage requirement"
+          echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
+
       - name: Find changed metadata files
         id: find_files
         run: |
-          echo "Finding changes between HEAD~1 and HEAD"
           git diff --name-only HEAD~1 HEAD > changed-files.txt
-          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          grep -E "(force-app/|force-app2/)" changed-files.txt > salesforce-changes.txt || true
+          echo "--- All changed files ---"
+          cat changed-files.txt
+          echo "-------------------------"
           echo "--- Salesforce changes ---"
           cat salesforce-changes.txt
           echo "--------------------------"
@@ -948,105 +936,119 @@ jobs:
             echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "No Salesforce metadata changes detected. Skipping validation."
+            echo "No Salesforce metadata changes detected. Skipping deployment."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
-      - name: Validate Delta against Sandbox
+
+      - name: Validate Delta against Sandbox Org
+        id: validate
         if: steps.find_files.outputs.delta_exists == 'true'
-        id: validate_delta_sandbox
         run: |
-          echo "Validating delta changes against Sandbox..."
-          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-          if [ -z "$SOURCE_PATHS" ]; then echo "No paths to validate."; exit 0; fi
-
-          echo "Validating paths: $SOURCE_PATHS"
-
-          VALIDATION_JSON=$(sf project deploy validate \
-            $SOURCE_PATHS \
-            --target-org SandboxOrg \
+          SOURCE_ARGS=""
+          while read -r file_path; do
+            SOURCE_ARGS="$SOURCE_ARGS --source-dir $file_path"
+          done < salesforce-changes.txt
+          echo "--- Validating the following files ---"
+          echo $SOURCE_ARGS
+          echo "--------------------------------------"
+          VALIDATE_JSON=$(sf project deploy validate \
+            $SOURCE_ARGS \
             --test-level RunLocalTests \
-            --wait 60 \
-            --verbose \
+            --target-org SandboxOrg \
             --json) || true
             
-          echo "--- Sandbox Validation Result JSON ---"
-          echo "$VALIDATION_JSON" | jq .
-          echo "--------------------------------------"
-
-          STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
-
-          if [ "$STATUS" -eq 0 ]; then
-            echo "Validation successful."
-            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
-              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
-              echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
-            fi
-            
-          else
-            echo "Validation FAILED. Parsing results..."
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            
-            if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
-              
-              echo "--- Test Run Summary (Failure) ---"
-              echo "Total Tests Run: $NUM_TESTS"
-              echo "Total Failures: $NUM_FAILED"
-              
-              if [ "$NUM_FAILED" -gt 0 ]; then
-                echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
-                echo "---------------------"
-              fi
-
-              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-              
-              if [ "$TOTAL_LINES" -gt 0 ]; then
-                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-                echo "--- Code Coverage ---"
-                echo "Total Lines: $TOTAL_LINES"
-                echo "Lines Covered: $LINES_COVERED"
-                echo "COVERAGE: $COVERAGE_PERCENT%"
-                
-                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
-                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-                fi
-                echo "---------------------"
-              else
-                echo "No lines found for coverage calculation."
-              fi
-            fi
-            
-            COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
-            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
-              echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
-              echo "-----------------------------------------------"
-            fi
-            
-            exit 1 # Fail the job
+          echo "VALIDATE_JSON: $VALIDATE_JSON"
+          STATUS=$(echo $VALIDATE_JSON | jq -r .status)
+          if [ "$STATUS" != "0" ]; then
+            echo "Validation failed! Response: $VALIDATE_JSON"
+            exit 1
           fi
-      - name: Deploy Delta to Sandbox (Quick Deploy)
-        if: steps.validate_delta_sandbox.outputs.validation_id
+          JOB_ID=$(echo $VALIDATE_JSON | jq -r .result.id)
+          echo "Validation started. Job ID: $JOB_ID"
+          echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for Validation to Complete
+        id: wait_step
+        if: steps.validate.outputs.job-id && steps.find_files.outputs.delta_exists == 'true'
         run: |
-          echo "Validation complete. Proceeding with quick deploy to Sandbox."
-          sf project deploy quick \
-            --job-id ${{ steps.validate_delta_sandbox.outputs.validation_id }} \
+          echo "Waiting for validation (Job ID: ${{ steps.validate.outputs.job-id }}) to complete..."
+          sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org SandboxOrg
+            
+          echo "Validation completed successfully."
+
+      - name: Check Validation Test Coverage
+        id: check_validation_coverage
+        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Checking test coverage from validation results..."
+          DEPLOY_REPORT=$(sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
             --target-org SandboxOrg \
-            --verbose
+            --json)
+          echo "Deploy report: $DEPLOY_REPORT"
+          VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.numberTestsCompleted / .result.numberTestsTotal * 100' 2>/dev/null || echo "0")
+          if [ "$VALIDATION_COVERAGE" = "0" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.details.runTestResult.codeCoverage[] | select(.name != null) | .coveredLines / (.coveredLines + .uncoveredLines) * 100' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
+          fi
+          echo "Validation test coverage: ${VALIDATION_COVERAGE}%"
+          if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+            echo "Warning: Could not retrieve validation coverage, proceeding with caution"
+            VALIDATION_COVERAGE=0
+          fi
+          if (( $(echo "$VALIDATION_COVERAGE <= 75" | bc -l) )); then
+            echo "ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is at or below the required 75% threshold"
+            exit 1
+          fi
+          echo "✓ Validation meets the 75% test coverage requirement"
+          echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Check Combined Coverage Before Deployment
+        id: check_combined_coverage
+        if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Verifying combined coverage of existing and new Apex classes..."
+          APEX_CLASSES=$(sf apex list class \
+            --target-org SandboxOrg \
+            --json | jq -r '.result[].FullName')
+          echo "Found Apex classes in org:"
+          echo "$APEX_CLASSES"
+          echo "Running tests to verify combined coverage..."
+          COMBINED_TEST_RESULT=$(sf apex run test \
+            --target-org SandboxOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json) || true
+          echo "Combined test result: $COMBINED_TEST_RESULT"
+          COMBINED_COVERAGE=$(echo $COMBINED_TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
+          echo "Combined Apex coverage (existing + new): ${COMBINED_COVERAGE}%"
+          if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ]; then
+            echo "Error: Could not retrieve combined coverage"
+            exit 1
+          fi
+          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
+            echo "The new deployment would bring overall org coverage below 90%"
+            exit 1
+          fi
+          echo "✓ Combined coverage meets the 90% requirement"
+          echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Deploy Quick to Sandbox Org
+        if: steps.check_combined_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "All coverage validations passed:"
+          echo "  - Initial Sandbox org coverage: ${{ steps.check_org_coverage.outputs.org_coverage }}%"
+          echo "  - Validation test coverage: ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
+          echo "  - Combined coverage: ${{ steps.check_combined_coverage.outputs.combined_coverage }}%"
+          echo ""
+          echo "Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
+          sf project deploy quick \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org SandboxOrg
+          echo "✓ Deployment completed successfully"
 
   # ========================================
   # 4. FOURTH JOB: Production Deployment
@@ -1054,134 +1056,184 @@ jobs:
   deploy_production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: staging_deployment # <--- This remains correct
-    if: needs.staging_deployment.outputs.delta_exists == 'true' # <--- This remains correct
+    needs: staging_deployment # <--- Runs after Staging
+    if: needs.staging_deployment.outputs.delta_exists == 'true' # <--- Skips if Staging found no delta
     environment:
       name: production
       url: ${{ steps.auth_prod.outputs.org_url }}
+    outputs:
+      delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
-      - name: Check out code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
-      - name: Force-update Salesforce CLI
-        run: sf update
-      - name: Authenticate to Production
+        run: |
+          npm install -g @salesforce/cli
+
+      - name: Install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Authenticate to Production Org
         id: auth_prod
         run: |
-          echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a ProdOrg -s
-          org_url=$(sfdx force:org:display -u ProdOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias ProdOrg --set-default
+          org_url=$(sf org display --target-org ProdOrg --json | jq -r .result.instanceUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
-      - name: Find changed metadata files for Prod
-        id: find_files_prod
+
+      - name: Check Overall Apex Coverage in Production Org
+        id: check_org_coverage
         run: |
-          echo "Finding changes between HEAD~1 and HEAD"
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
-          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
-          echo "--- Salesforce changes to deploy ---"
-          cat salesforce-changes.txt
-          echo "------------------------------------"
-          if [ ! -s salesforce-changes.txt ]; then
-            echo "No Salesforce metadata changes detected. This is unexpected."
-          fi
-      - name: Validate Delta against Production
-        id: validate_delta_prod
-        run: |
-          echo "Validating delta changes against Production..."
-          SOURCE_PATHS=$(cat salesforce-changes.txt | sed 's_^_ -d _' | tr '\n' ' ')
-          if [ -z "$SOURCE_PATHS" ]; then
-            echo "No paths to validate. This is unexpected as the job should have been skipped."
+          echo "Fetching overall Apex test coverage from Production org..."
+          TEST_RESULT=$(sf apex run test \
+            --target-org ProdOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json) || true
+          echo "Test result: $TEST_RESULT"
+          ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
+          echo "Current Production org-wide Apex coverage: ${ORG_COVERAGE}%"
+          if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
+            echo "Error: Could not retrieve org-wide coverage"
             exit 1
           fi
-
-          echo "Validating paths: $SOURCE_PATHS"
-
-          VALIDATION_JSON=$(sf project deploy validate \
-            $SOURCE_PATHS \
-            --target-org ProdOrg \
-            --test-level RunLocalTests \
-            --wait 60 \
-            --verbose \
-            --json) || true
-
-          echo "--- Production Validation Result JSON ---"
-          echo "$VALIDATION_JSON" | jq .
-          echo "-----------------------------------------"
-
-          STATUS=$(echo "$VALIDATION_JSON" | jq -r .status)
-
-          if [ "$STATUS" -eq 0 ]; then
-            echo "Production validation successful."
-            VALIDATION_ID=$(echo "$VALIDATION_JSON" | jq -r .result.id)
-            echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-            
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "--- Code Coverage (Success) ---"
-              echo "Lines Covered: $LINES_COVERED / $TOTAL_LINES"
-              echo "COVERAGE: $COVERAGE_PERCENT%"
-              echo "-------------------------------"
-            fi
-            
-          else
-            echo "Production validation FAILED. Parsing results..."
-            
-            TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            
-            if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
-              
-              echo "--- Test Run Summary (Failure) ---"
-              echo "Total Tests Run: $NUM_TESTS"
-              echo "Total Failures: $NUM_FAILED"
-              
-              if [ "$NUM_FAILED" -gt 0 ]; then
-                echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
-                echo "---------------------"
-              fi
-
-              TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-              LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
-              
-              if [ "$TOTAL_LINES" -gt 0 ]; then
-                COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-                echo "--- Code Coverage ---"
-                echo "Total Lines: $TOTAL_LINES"
-                echo "Lines Covered: $LINES_COVERED"
-                echo "COVERAGE: $COVERAGE_PERCENT%"
-                
-                if [ "$COVERAGE_PERCENT" -lt 75 ]; then
-                  echo "ERROR: Code coverage is $COVERAGE_PERCENT%. Minimum required is 75%."
-                fi
-                echo "---------------------"
-              else
-                echo "No lines found for coverage calculation."
-              fi
-            fi
-            
-            COMP_FAILURES=$(echo "$VALIDATION_JSON" | jq .result.details.componentFailures)
-            if [ "$COMP_FAILURES" != "null" ] && [ "$(echo "$COMP_FAILURES" | jq 'length')" -gt 0 ]; then
-              echo "--- Component Failures (Compilation Errors) ---"
-              echo "$COMP_FAILURES" | jq -r '.[] | "   - \(.problemType): \(.fileName) - \(.problem)"'
-              echo "-----------------------------------------------"
-            fi
-            
-            exit 1 # Fail the job
+          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: Production org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+            exit 1
           fi
-      - name: Deploy Delta to Production (Quick Deploy)
-        if: steps.validate_delta_prod.outputs.validation_id
+          echo "✓ Production org meets the 90% coverage requirement"
+          echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Find changed metadata files
+        id: find_files
         run: |
-          echo "Production validation complete. Proceeding with quick deploy to Production."
-          sf project deploy quick \
-            --job-id ${{ steps.validate_delta_prod.outputs.validation_id }} \
+          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          grep -E "(force-app/|force-app2/)" changed-files.txt > salesforce-changes.txt || true
+          echo "--- All changed files ---"
+          cat changed-files.txt
+          echo "-------------------------"
+          echo "--- Salesforce changes ---"
+          cat salesforce-changes.txt
+          echo "--------------------------"
+          if [ -s salesforce-changes.txt ]; then
+            echo "Salesforce changes detected."
+            echo "delta_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No Salesforce metadata changes detected. Skipping deployment."
+            echo "delta_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate Delta against Production Org
+        id: validate
+        if: steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          SOURCE_ARGS=""
+          while read -r file_path; do
+            SOURCE_ARGS="$SOURCE_ARGS --source-dir $file_path"
+          done < salesforce-changes.txt
+          echo "--- Validating the following files ---"
+          echo $SOURCE_ARGS
+          echo "--------------------------------------"
+          VALIDATE_JSON=$(sf project deploy validate \
+            $SOURCE_ARGS \
+            --test-level RunLocalTests \
             --target-org ProdOrg \
-            --verbose
+            --json) || true
+            
+          echo "VALIDATE_JSON: $VALIDATE_JSON"
+          STATUS=$(echo $VALIDATE_JSON | jq -r .status)
+          if [ "$STATUS" != "0" ]; then
+            echo "Validation failed! Response: $VALIDATE_JSON"
+            exit 1
+          fi
+          JOB_ID=$(echo $VALIDATE_JSON | jq -r .result.id)
+          echo "Validation started. Job ID: $JOB_ID"
+          echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for Validation to Complete
+        id: wait_step
+        if: steps.validate.outputs.job-id && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Waiting for validation (Job ID: ${{ steps.validate.outputs.job-id }}) to complete..."
+          sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org ProdOrg
+            
+          echo "Validation completed successfully."
+
+      - name: Check Validation Test Coverage
+        id: check_validation_coverage
+        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Checking test coverage from validation results..."
+          DEPLOY_REPORT=$(sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org ProdOrg \
+            --json)
+          echo "Deploy report: $DEPLOY_REPORT"
+          VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.numberTestsCompleted / .result.numberTestsTotal * 100' 2>/dev/null || echo "0")
+          if [ "$VALIDATION_COVERAGE" = "0" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.details.runTestResult.codeCoverage[] | select(.name != null) | .coveredLines / (.coveredLines + .uncoveredLines) * 100' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
+          fi
+          echo "Validation test coverage: ${VALIDATION_COVERAGE}%"
+          if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+            echo "Warning: Could not retrieve validation coverage, proceeding with caution"
+            VALIDATION_COVERAGE=0
+          fi
+          if (( $(echo "$VALIDATION_COVERAGE <= 75" | bc -l) )); then
+            echo "ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is at or below the required 75% threshold"
+            exit 1
+          fi
+          echo "✓ Validation meets the 75% test coverage requirement"
+          echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Check Combined Coverage Before Deployment
+        id: check_combined_coverage
+        if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Verifying combined coverage of existing and new Apex classes..."
+          APEX_CLASSES=$(sf apex list class \
+            --target-org ProdOrg \
+            --json | jq -r '.result[].FullName')
+          echo "Found Apex classes in org:"
+          echo "$APEX_CLASSES"
+          echo "Running tests to verify combined coverage..."
+          COMBINED_TEST_RESULT=$(sf apex run test \
+            --target-org ProdOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json) || true
+          echo "Combined test result: $COMBINED_TEST_RESULT"
+          COMBINED_COVERAGE=$(echo $COMBINED_TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
+          echo "Combined Apex coverage (existing + new): ${COMBINED_COVERAGE}%"
+          if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ]; then
+            echo "Error: Could not retrieve combined coverage"
+            exit 1
+          fi
+          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
+            echo "The new deployment would bring overall org coverage below 90%"
+            exit 1
+          fi
+          echo "✓ Combined coverage meets the 90% requirement"
+          echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Deploy Quick to Production Org
+        if: steps.check_combined_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "All coverage validations passed:"
+          echo "  - Initial Production org coverage: ${{ steps.check_org_coverage.outputs.org_coverage }}%"
+          echo "  - Validation test coverage: ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
+          echo "  - Combined coverage: ${{ steps.check_combined_coverage.outputs.combined_coverage }}%"
+          echo ""
+          echo "Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
+          sf project deploy quick \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org ProdOrg
+          echo "✓ Deployment completed successfully"
