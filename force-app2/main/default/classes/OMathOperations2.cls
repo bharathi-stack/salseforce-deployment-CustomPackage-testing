@@ -1,60 +1,60 @@
-public class OMathOperations2 {
-  public static Integer mulFiveAndFive() {
-    return 5 * 5;
-  }
-
-  public static Integer addFiveAndFive() {
-    return 5 + 5;
-  }
-
-  public static Integer subFiveAndFive() {
-    return 5 - 5;
-  }
-
-  public static Integer divFiveAndFive() {
-    return 5 / 5;
-  }
-
-  public static Integer modFiveAndFive() {
-    return Math.mod(5, 5);
-  }
-
-  public static Integer complexOperation(Boolean flag) {
-    Integer result = 0;
-    if (flag) {
-      result = mulFiveAndFive() + addFiveAndFive();
-    } else {
-      result = subFiveAndFive() + divFiveAndFive();
-    }
-    return result;
-  }
-}
-
-// CORRECT CODE
-// testingsss
 // public class OMathOperations2 {
-//   /**
-//    * @description Multiplies 5 and 5 together.
-//    * @return Integer The product of 5 * 5.
-//    */
 //   public static Integer mulFiveAndFive() {
-//     Integer a = 5;
-//     Integer b = 5;
-//     Integer result = a * b;
-//     return result;
+//     return 5 * 5;
 //   }
 
-//   /**
-//    * @description Adds 5 and 5 together.
-//    * @return Integer The sum of 5 + 5.
-//    */
 //   public static Integer addFiveAndFive() {
-//     Integer a = 5;
-//     Integer b = 5;
-//     Integer result = a + b;
+//     return 5 + 5;
+//   }
+
+//   public static Integer subFiveAndFive() {
+//     return 5 - 5;
+//   }
+
+//   public static Integer divFiveAndFive() {
+//     return 5 / 5;
+//   }
+
+//   public static Integer modFiveAndFive() {
+//     return Math.mod(5, 5);
+//   }
+
+//   public static Integer complexOperation(Boolean flag) {
+//     Integer result = 0;
+//     if (flag) {
+//       result = mulFiveAndFive() + addFiveAndFive();
+//     } else {
+//       result = subFiveAndFive() + divFiveAndFive();
+//     }
 //     return result;
 //   }
 // }
+
+// CORRECT CODE
+// testingsss
+public class OMathOperations2 {
+  /**
+   * @description Multiplies 5 and 5 together.
+   * @return Integer The product of 5 * 5.
+   */
+  public static Integer mulFiveAndFive() {
+    Integer a = 5;
+    Integer b = 5;
+    Integer result = a * b;
+    return result;
+  }
+
+  /**
+   * @description Adds 5 and 5 together.
+   * @return Integer The sum of 5 + 5.
+   */
+  public static Integer addFiveAndFive() {
+    Integer a = 5;
+    Integer b = 5;
+    Integer result = a + b;
+    return result;
+  }
+}
 
 // VIOLATIONS
 // // testingsss - Now with PMD Violations
