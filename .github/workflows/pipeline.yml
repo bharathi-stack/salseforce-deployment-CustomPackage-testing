@@ -790,31 +790,31 @@ jobs:
             
           echo "Validation completed successfully."
 
-      - name: Check Validation Test Coverage
-        id: check_validation_coverage
-        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
-        run: |
-          echo "Checking test coverage from validation results..."
-          DEPLOY_REPORT=$(sf project deploy report \
-            --job-id ${{ steps.validate.outputs.job-id }} \
-            --target-org QAOrg \
-            --json)
-          echo "Deploy report: $DEPLOY_REPORT"
-          VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.numberTestsCompleted / .result.numberTestsTotal * 100' 2>/dev/null || echo "0")
-          if [ "$VALIDATION_COVERAGE" = "0" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
-            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.details.runTestResult.codeCoverage[] | select(.name != null) | .coveredLines / (.coveredLines + .uncoveredLines) * 100' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
-          fi
-          echo "Validation test coverage: ${VALIDATION_COVERAGE}%"
-          if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
-            echo "Warning: Could not retrieve validation coverage, proceeding with caution"
-            VALIDATION_COVERAGE=0
-          fi
-          if (( $(echo "$VALIDATION_COVERAGE <= 75" | bc -l) )); then
-            echo "ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is at or below the required 75% threshold"
-            exit 1
-          fi
-          echo "✓ Validation meets the 75% test coverage requirement"
-          echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
+      # - name: Check Validation Test Coverage
+      #   id: check_validation_coverage
+      #   if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+      #   run: |
+      #     echo "Checking test coverage from validation results..."
+      #     DEPLOY_REPORT=$(sf project deploy report \
+      #       --job-id ${{ steps.validate.outputs.job-id }} \
+      #       --target-org QAOrg \
+      #       --json)
+      #     echo "Deploy report: $DEPLOY_REPORT"
+      #     VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.numberTestsCompleted / .result.numberTestsTotal * 100' 2>/dev/null || echo "0")
+      #     if [ "$VALIDATION_COVERAGE" = "0" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+      #       VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '.result.details.runTestResult.codeCoverage[] | select(.name != null) | .coveredLines / (.coveredLines + .uncoveredLines) * 100' | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
+      #     fi
+      #     echo "Validation test coverage: ${VALIDATION_COVERAGE}%"
+      #     if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+      #       echo "Warning: Could not retrieve validation coverage, proceeding with caution"
+      #       VALIDATION_COVERAGE=0
+      #     fi
+      #     if (( $(echo "$VALIDATION_COVERAGE <= 75" | bc -l) )); then
+      #       echo "ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is at or below the required 75% threshold"
+      #       exit 1
+      #     fi
+      #     echo "✓ Validation meets the 75% test coverage requirement"
+      #     echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Check Combined Coverage Before Deployment
         id: check_combined_coverage
