@@ -27,7 +27,7 @@ private class OMathOperationsTest2 {
   // ❌ We are not testing modFiveAndFive() to achieve 80% coverage
 }
 
-// // testing
+// // testings
 // @isTest
 // private class OMathOperationsTest2 {
 //   @isTest

@@ -1,4 +1,4 @@
-// 80% COVER
+// 80% COVERs
 public class OMathOperations2 {
   public static Integer mulFiveAndFive() {
     return 5 * 5; // 1 line
