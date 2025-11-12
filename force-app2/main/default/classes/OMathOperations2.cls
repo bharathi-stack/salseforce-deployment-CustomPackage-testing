@@ -1,23 +1,32 @@
-// 80% COVERs
 public class OMathOperations2 {
   public static Integer mulFiveAndFive() {
-    return 5 * 5; // 1 line
+    return 5 * 5;
   }
 
   public static Integer addFiveAndFive() {
-    return 5 + 5; // 1 line
+    return 5 + 5;
   }
 
   public static Integer subFiveAndFive() {
-    return 5 - 5; // 1 line
+    return 5 - 5;
   }
 
   public static Integer divFiveAndFive() {
-    return 5 / 5; // 1 line
+    return 5 / 5;
   }
 
   public static Integer modFiveAndFive() {
-    return Math.mod(5, 5); // 1 line
+    return Math.mod(5, 5);
+  }
+
+  public static Integer complexOperation(Boolean flag) {
+    Integer result = 0;
+    if (flag) {
+      result = mulFiveAndFive() + addFiveAndFive();
+    } else {
+      result = subFiveAndFive() + divFiveAndFive();
+    }
+    return result;
   }
 }
 

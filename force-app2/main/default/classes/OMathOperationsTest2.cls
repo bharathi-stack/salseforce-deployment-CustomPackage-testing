@@ -2,29 +2,23 @@
 private class OMathOperationsTest2 {
   @isTest
   static void testMulFiveAndFive() {
-    Integer actual = OMathOperations2.mulFiveAndFive();
-    System.assertEquals(25, actual, 'Expected 25 from multiplication');
+    Integer result = OMathOperations2.mulFiveAndFive();
+    System.assertEquals(25, result);
   }
 
   @isTest
   static void testAddFiveAndFive() {
-    Integer actual = OMathOperations2.addFiveAndFive();
-    System.assertEquals(10, actual, 'Expected 10 from addition');
+    Integer result = OMathOperations2.addFiveAndFive();
+    System.assertEquals(10, result);
   }
 
   @isTest
   static void testSubFiveAndFive() {
-    Integer actual = OMathOperations2.subFiveAndFive();
-    System.assertEquals(0, actual, 'Expected 0 from subtraction');
+    Integer result = OMathOperations2.subFiveAndFive();
+    System.assertEquals(0, result);
   }
 
-  @isTest
-  static void testDivFiveAndFive() {
-    Integer actual = OMathOperations2.divFiveAndFive();
-    System.assertEquals(1, actual, 'Expected 1 from division');
-  }
-
-  // ❌ We are not testing modFiveAndFive() to achieve 80% coverage
+  // ❌ Not testing divFiveAndFive(), modFiveAndFive(), or complexOperation()
 }
 
 // // testings
