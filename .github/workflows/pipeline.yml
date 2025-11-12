@@ -746,8 +746,11 @@ jobs:
           if [ "$STATUS" -eq 0 ]; then
             echo "Overall validation syntax check successful. Checking coverage..."
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
+            
+            # --- FIX ---
+            # Use // 0 to default null values to 0, preventing bash errors
+            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
+            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
             
             if [ "$TOTAL_LINES" -gt 0 ]; then
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
@@ -770,7 +773,7 @@ jobs:
             # Print test failures
             TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               if [ "$NUM_FAILED" -gt 0 ]; then
                 echo "--- Failing Tests (Pre-Check) ---"
                 echo "$TEST_RESULT" | jq -r '.failures[] | "   - \(.name): \(.message)"'
@@ -834,13 +837,13 @@ jobs:
           TEST_RESULT=$(echo "$VALIDATION_JSON" | jq .result.details.runTestResult)
 
           # General variables for coverage
-          TOTAL_LINES=0
-          LINES_COVERED=0
+          # --- FIX ---
+          # Use // 0 to default null values to 0, preventing bash errors
+          TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
+          LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
           COVERAGE_PERCENT=0
 
           if [ "$TEST_RESULT" != "null" ]; then
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r .totalLines)
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r .linesCovered)
             if [ "$TOTAL_LINES" -gt 0 ]; then
               COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
             fi
@@ -872,8 +875,8 @@ jobs:
             echo "Delta validation FAILED. Parsing results..."
             
             if [ "$TEST_RESULT" != "null" ]; then
-              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r .numTestsRun)
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r .numFailures)
+              NUM_TESTS=$(echo "$TEST_RESULT" | jq -r '.numTestsRun // 0')
+              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
               
               echo "--- Test Run Summary (Failure) ---"
               echo "Total Tests Run: $NUM_TESTS"
