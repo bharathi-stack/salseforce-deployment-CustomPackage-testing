@@ -730,7 +730,7 @@ jobs:
 
           COVERAGE_RESULT=$(sf data query \
             --query "$COVERAGE_QUERY" \
-            --target-org QAOrg \
+            --target-org QAScratchOrg \
             --json) || true
 
           echo "$COVERAGE_RESULT" | jq . > org_coverage.json
