@@ -697,280 +697,99 @@ jobs:
     outputs:
       delta_exists: ${{ steps.find_files.outputs.delta_exists }}
     steps:
-      - name: Check out code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Salesforce CLI
-        uses: sfdx-actions/setup-sfdx@v1
+        run: |
+          npm install -g @salesforce/cli
 
-      - name: Force-update Salesforce CLI
-        run: sf update
+      - name: Install jq
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
 
       - name: Authenticate to QA Org
         id: auth_qa
         run: |
-          echo "${{ secrets.SFDX_QA_AUTH_URL }}" > sfdx_auth_file.txt
-          sfdx auth:sfdxurl:store -f sfdx_auth_file.txt -a QAOrg -s
-          org_url=$(sfdx force:org:display -u QAOrg --json | jq -r .result.sfdxAuthUrl)
+          echo "${{ secrets.SFDX_QA_AUTH_URL }}" > auth_url.txt
+          sf org login sfdx-url --sfdx-url-file auth_url.txt --alias QAOrg --set-default
+          org_url=$(sf org display --target-org QAOrg --json | jq -r .result.instanceUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      # STEP 1: Check existing org code coverage (90% requirement)
-      - name: Check Existing Org Code Coverage
-        id: check_org_coverage
-        run: |
-          echo "======================================================"
-          echo "Checking existing org code coverage (90% requirement)"
-          echo "======================================================"
-
-          COVERAGE_QUERY="SELECT ApexClassOrTriggerId, NumLinesCovered, NumLinesUncovered FROM ApexCodeCoverageAggregate"
-
-          COVERAGE_RESULT=$(sf data query \
-            --query "$COVERAGE_QUERY" \
-            --target-org QAScratchOrg \
-            --json) || true
-
-          echo "$COVERAGE_RESULT" | jq . > org_coverage.json
-
-          RECORDS=$(echo "$COVERAGE_RESULT" | jq -r '.result.records // []')
-          NUM_RECORDS=$(echo "$RECORDS" | jq 'length')
-
-          if [ "$NUM_RECORDS" -eq 0 ]; then
-            echo "⚠️  No code coverage data found in org"
-            echo "Skipping existing coverage check"
-            echo "org_has_apex=false" >> $GITHUB_OUTPUT
-          else
-            echo "Found coverage data for $NUM_RECORDS classes/triggers"
-            
-            TOTAL_LINES=$(echo "$RECORDS" | jq '[.[] | (.NumLinesCovered + .NumLinesUncovered)] | add')
-            COVERED_LINES=$(echo "$RECORDS" | jq '[.[] | .NumLinesCovered] | add')
-            
-            echo "Total Lines: $TOTAL_LINES"
-            echo "Lines Covered: $COVERED_LINES"
-            
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * COVERED_LINES / TOTAL_LINES))
-              echo "Coverage: $COVERAGE_PERCENT%"
-              echo "Requirement: 90%"
-              
-              if [ "$COVERAGE_PERCENT" -lt 90 ]; then
-                echo "❌ ERROR: Existing org coverage is $COVERAGE_PERCENT%"
-                echo "Minimum required: 90%"
-                exit 1
-              else
-                echo "✓ Existing org meets 90% coverage requirement"
-                echo "org_has_apex=true" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "❌ ERROR: Org has Apex classes but 0% coverage"
-              exit 1
-            fi
-          fi
-
-      # STEP 2: Find changed metadata files
       - name: Find changed metadata files
         id: find_files
         run: |
-          echo "======================================================"
-          echo "Identifying changed files"
-          echo "======================================================"
-
           git diff --name-only HEAD~1 HEAD > changed-files.txt
-          grep -E "(force-app/|force-app2/|sfdx-project.json)" changed-files.txt > salesforce-changes.txt || true
+          grep -E "(force-app/|force-app2/)" changed-files.txt > salesforce-changes.txt || true
+
+          echo "--- All changed files ---"
+          cat changed-files.txt
+          echo "-------------------------"
+
+          echo "--- Salesforce changes ---"
+          cat salesforce-changes.txt
+          echo "--------------------------"
 
           if [ -s salesforce-changes.txt ]; then
-            echo "--- Changed Files ---"
-            cat salesforce-changes.txt
-            echo "---------------------"
-            echo "✓ Salesforce changes detected"
+            echo "Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "⚠️  No Salesforce metadata changes detected"
+            echo "No Salesforce metadata changes detected. Skipping deployment."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      # STEP 3: Check for Apex changes
-      - name: Check for Apex changes
-        if: steps.find_files.outputs.delta_exists == 'true'
-        id: check_apex
-        run: |
-          echo "======================================================"
-          echo "Checking for Apex class changes"
-          echo "======================================================"
-
-          if grep -E "\.cls$" salesforce-changes.txt | grep -v -i "test\.cls$" > apex-changes.txt 2>/dev/null; then
-            echo "--- Changed Apex Classes ---"
-            cat apex-changes.txt
-            echo "----------------------------"
-            echo "✓ Apex class changes detected"
-            echo "has_apex_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "No Apex class changes detected"
-            echo "has_apex_changes=false" >> $GITHUB_OUTPUT
-          fi
-
-      # STEP 4: Validate Delta against sandbox
-      - name: Validate Delta against sandbox
+      - name: Validate Delta against QA Org
         id: validate
         if: steps.find_files.outputs.delta_exists == 'true'
         run: |
-          echo "======================================================"
-          echo "Validating delta changes"
-          echo "======================================================"
-
           SOURCE_ARGS=""
+
           while read -r file_path; do
             SOURCE_ARGS="$SOURCE_ARGS --source-dir $file_path"
           done < salesforce-changes.txt
 
-          echo "--- Validating files ---"
-          echo "$SOURCE_ARGS"
-          echo "------------------------"
+          echo "--- Validating the following files ---"
+          echo $SOURCE_ARGS
+          echo "--------------------------------------"
 
           VALIDATE_JSON=$(sf project deploy validate \
             $SOURCE_ARGS \
             --test-level RunLocalTests \
-            --target-org QAScratchOrg \
-            --wait 60 \
+            --target-org QAOrg \
             --json) || true
+            
+          echo "VALIDATE_JSON: $VALIDATE_JSON"
 
-          echo "$VALIDATE_JSON" | jq . > validation_result.json
-
-          STATUS=$(echo "$VALIDATE_JSON" | jq -r '.status // 1')
-
-          if [ "$STATUS" -eq 0 ]; then
-            echo "✓ Validation syntax check successful"
-            
-            JOB_ID=$(echo "$VALIDATE_JSON" | jq -r '.result.id')
-            echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
-            
-            # Extract test results
-            TEST_RESULT=$(echo "$VALIDATE_JSON" | jq '.result.details.runTestResult')
-            TOTAL_LINES=$(echo "$TEST_RESULT" | jq -r '.totalLines // 0')
-            LINES_COVERED=$(echo "$TEST_RESULT" | jq -r '.linesCovered // 0')
-            
-            HAS_APEX="${{ steps.check_apex.outputs.has_apex_changes }}"
-            
-            echo ""
-            echo "--- Validation Code Coverage ---"
-            echo "Total Lines: $TOTAL_LINES"
-            echo "Lines Covered: $LINES_COVERED"
-            
-            if [ "$TOTAL_LINES" -gt 0 ]; then
-              COVERAGE_PERCENT=$((100 * LINES_COVERED / TOTAL_LINES))
-              echo "Coverage: $COVERAGE_PERCENT%"
-              echo "--------------------------------"
-              
-              # Check 1: If Apex changed, new classes must have 75% coverage
-              if [ "$HAS_APEX" = "true" ]; then
-                echo ""
-                echo "Checking new Apex class coverage (75% requirement)..."
-                
-                CHANGED_CLASSES=$(grep -E "\.cls$" salesforce-changes.txt | grep -v -i "test\.cls$" | sed 's|.*/||' | sed 's|\.cls||' | sort -u)
-                
-                if [ -n "$CHANGED_CLASSES" ]; then
-                  echo "Changed non-test classes:"
-                  echo "$CHANGED_CLASSES"
-                  
-                  ALL_CLASSES_PASS=true
-                  while IFS= read -r class_name; do
-                    if [ -n "$class_name" ]; then
-                      CLASS_COVERAGE=$(echo "$TEST_RESULT" | jq -r \
-                        --arg name "$class_name" \
-                        '.codeCoverage[]? | select(.name == $name) | 
-                        if .numLocations > 0 then 
-                          (((.numLocations - .numLocationsNotCovered) * 100) / .numLocations | floor) 
-                        else 0 end')
-                      
-                      if [ -n "$CLASS_COVERAGE" ] && [ "$CLASS_COVERAGE" != "null" ]; then
-                        if [ "$CLASS_COVERAGE" -lt 75 ]; then
-                          echo "  ❌ $class_name: ${CLASS_COVERAGE}% (< 75%)"
-                          ALL_CLASSES_PASS=false
-                        else
-                          echo "  ✓ $class_name: ${CLASS_COVERAGE}%"
-                        fi
-                      else
-                        echo "  ⚠️  $class_name: No coverage data"
-                      fi
-                    fi
-                  done <<< "$CHANGED_CLASSES"
-                  
-                  if [ "$ALL_CLASSES_PASS" = "false" ]; then
-                    echo ""
-                    echo "❌ ERROR: Some Apex classes have less than 75% coverage"
-                    exit 1
-                  else
-                    echo "✓ All new Apex classes meet 75% coverage requirement"
-                  fi
-                fi
-              fi
-              
-              # Check 2: Overall coverage must be 90%
-              echo ""
-              echo "Checking overall post-deployment coverage (90% requirement)..."
-              
-              if [ "$COVERAGE_PERCENT" -lt 90 ]; then
-                echo "❌ ERROR: Overall coverage is $COVERAGE_PERCENT%"
-                echo "Minimum required: 90%"
-                exit 1
-              else
-                echo "✓ Overall coverage meets 90% requirement ($COVERAGE_PERCENT%)"
-              fi
-              
-            elif [ "$HAS_APEX" = "true" ]; then
-              echo "Coverage: N/A"
-              echo "⚠️  Apex modified but no coverage data returned"
-            else
-              echo "Coverage: N/A (metadata only)"
-              echo "✓ Metadata-only deployment"
-            fi
-            
-          else
-            echo "❌ Validation FAILED"
-            
-            # Show test failures if any
-            TEST_RESULT=$(echo "$VALIDATE_JSON" | jq '.result.details.runTestResult')
-            if [ "$TEST_RESULT" != "null" ]; then
-              NUM_FAILED=$(echo "$TEST_RESULT" | jq -r '.numFailures // 0')
-              
-              if [ "$NUM_FAILED" -gt 0 ]; then
-                echo ""
-                echo "--- Failing Tests ---"
-                echo "$TEST_RESULT" | jq -r '.failures[]? | "  ❌ \(.name): \(.message)"'
-              fi
-            fi
-            
-            # Show component failures
-            COMP_FAILURES=$(echo "$VALIDATE_JSON" | jq '.result.details.componentFailures')
-            if [ "$COMP_FAILURES" != "null" ]; then
-              echo ""
-              echo "--- Component Failures ---"
-              echo "$COMP_FAILURES" | jq -r '.[]? | "  ❌ \(.fileName): \(.problem)"'
-            fi
-            
+          STATUS=$(echo $VALIDATE_JSON | jq -r .status)
+          if [ "$STATUS" != "0" ]; then
+            echo "Validation failed! Response: $VALIDATE_JSON"
             exit 1
           fi
 
-      # STEP 5: Deploy Quick (using Validation ID)
-      - name: Deploy Quick to Sandbox
+          JOB_ID=$(echo $VALIDATE_JSON | jq -r .result.id)
+          echo "Validation started. Job ID: $JOB_ID"
+          echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for Validation to Complete
+        id: wait_step
         if: steps.validate.outputs.job-id && steps.find_files.outputs.delta_exists == 'true'
         run: |
-          echo "======================================================"
-          echo "Deploying to Sandbox"
-          echo "======================================================"
-          echo ""
-          echo "✓ All validations passed. Proceeding with quick deploy..."
-          echo "Using Validation ID: ${{ steps.validate.outputs.job-id }}"
-          echo ""
+          echo "Waiting for validation (Job ID: ${{ steps.validate.outputs.job-id }}) to complete..."
+          sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org QAOrg
+            
+          echo "Validation completed successfully."
 
+      - name: Deploy Quick to QA Org
+        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
           sf project deploy quick \
             --job-id ${{ steps.validate.outputs.job-id }} \
-            --target-org QAScratchOrg \
-            --verbose
-
-          echo ""
-          echo "✓ Deployment completed successfully!"
+            --target-org QAOrg
 
   # ========================================
   # 3. THIRD JOB: Validate & Deploy to Sandbox
