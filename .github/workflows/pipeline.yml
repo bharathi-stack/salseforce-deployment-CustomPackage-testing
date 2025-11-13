@@ -742,12 +742,12 @@ jobs:
             exit 1
           fi
 
-          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
-            echo "❌ ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+          if (( $(echo "$ORG_COVERAGE < 95" | bc -l) )); then
+            echo "❌ ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 95% threshold"
             exit 1
           fi
 
-          echo "✅ QA org meets the 90% coverage requirement"
+          echo "✅ QA org meets the 95% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Find changed metadata files
@@ -926,15 +926,15 @@ jobs:
             exit 1
           fi
 
-          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
-            echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
-            echo "❌ The new deployment would bring overall org coverage below 90%"
+          if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
+            echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold"
+            echo "❌ The new deployment would bring overall org coverage below 95%"
             echo ""
             echo "⚠️  DEPLOYMENT BLOCKED - Please improve test coverage before deploying"
             exit 1
           fi
 
-          echo "✅ Combined coverage meets the 90% requirement"
+          echo "✅ Combined coverage meets the 95% requirement"
           echo "✅ Deployment is approved to proceed"
           echo ""
           echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
@@ -1014,11 +1014,11 @@ jobs:
             echo "Error: Could not retrieve org-wide coverage"
             exit 1
           fi
-          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
-            echo "ERROR: Sandbox org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+          if (( $(echo "$ORG_COVERAGE < 95" | bc -l) )); then
+            echo "ERROR: Sandbox org Apex coverage is ${ORG_COVERAGE}%, which is below the required 95% threshold"
             exit 1
           fi
-          echo "✓ Sandbox org meets the 90% coverage requirement"
+          echo "✓ Sandbox org meets the 95% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Find changed metadata files
@@ -1128,12 +1128,12 @@ jobs:
             echo "Error: Could not retrieve combined coverage"
             exit 1
           fi
-          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
-            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
-            echo "The new deployment would bring overall org coverage below 90%"
+          if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
+            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold"
+            echo "The new deployment would bring overall org coverage below 95%"
             exit 1
           fi
-          echo "✓ Combined coverage meets the 90% requirement"
+          echo "✓ Combined coverage meets the 95% requirement"
           echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Deploy Quick to Sandbox Org
@@ -1202,11 +1202,11 @@ jobs:
             echo "Error: Could not retrieve org-wide coverage"
             exit 1
           fi
-          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
-            echo "ERROR: Production org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+          if (( $(echo "$ORG_COVERAGE < 95" | bc -l) )); then
+            echo "ERROR: Production org Apex coverage is ${ORG_COVERAGE}%, which is below the required 95% threshold"
             exit 1
           fi
-          echo "✓ Production org meets the 90% coverage requirement"
+          echo "✓ Production org meets the 95% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Find changed metadata files
@@ -1316,12 +1316,12 @@ jobs:
             echo "Error: Could not retrieve combined coverage"
             exit 1
           fi
-          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
-            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
-            echo "The new deployment would bring overall org coverage below 90%"
+          if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
+            echo "ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold"
+            echo "The new deployment would bring overall org coverage below 95%"
             exit 1
           fi
-          echo "✓ Combined coverage meets the 90% requirement"
+          echo "✓ Combined coverage meets the 95% requirement"
           echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Deploy Quick to Production Org
