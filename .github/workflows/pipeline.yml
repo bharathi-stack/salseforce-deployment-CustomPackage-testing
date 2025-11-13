@@ -737,6 +737,9 @@ jobs:
           echo $TEST_RESULT | jq -r '.result.codecoverage[] | select(.type == "ApexClass") | "\(.name): \(.coveredPercent)%"' || true
           echo ""
 
+          # Store existing classes data for later use
+          echo $TEST_RESULT | jq -r '.result.codecoverage[] | select(.type == "ApexClass") | {name: .name, percent: .coveredPercent}' > /tmp/existing_classes.json || true
+
           if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
             echo "❌ Error: Could not retrieve org-wide coverage"
             exit 1
@@ -850,6 +853,13 @@ jobs:
             echo "$CHANGED_CLASSES_COVERAGE"
             echo ""
             
+            # Store new classes data for later comparison
+            echo $DEPLOY_REPORT | jq -r '
+              .result.details.runTestResult.codeCoverage[]? 
+              | select(.name != null and .type == "Class") 
+              | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+            ' > /tmp/new_classes.json || true
+            
             # Calculate average coverage for changed classes
             VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
               [.result.details.runTestResult.codeCoverage[]? 
@@ -882,53 +892,97 @@ jobs:
           echo "======================================================"
           echo "STEP 3: Verifying Combined Coverage (Existing + New)"
           echo "======================================================"
-
-          # Get detailed coverage for all classes (existing + new after validation)
-          COMBINED_TEST_RESULT=$(sf apex run test \
-            --target-org QAOrg \
-            --code-coverage \
-            --result-format json \
-            --wait 30 \
-            --json) || true
-
-          # Extract combined org-wide coverage
-          COMBINED_COVERAGE=$(echo $COMBINED_TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
-
-          echo ""
-          echo "📊 Coverage Summary:"
-          echo "-------------------"
-          echo "Initial QA Org Coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}%"
-          echo "Changed Classes Avg Coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
-          echo "Combined Coverage (After Deploy): ${COMBINED_COVERAGE}%"
           echo ""
 
-          # Display detailed per-class breakdown
-          echo "Detailed Per-Class Coverage (All Classes):"
-          echo "-----------------------------------------"
-          echo $COMBINED_TEST_RESULT | jq -r '
-            .result.codecoverage[]? 
-            | select(.type == "ApexClass") 
-            | "\(.name): \(.coveredPercent)%"
-          ' || true
-          echo ""
-
-          # Calculate class count and total coverage for verification
-          CLASS_COUNT=$(echo $COMBINED_TEST_RESULT | jq -r '[.result.codecoverage[]? | select(.type == "ApexClass")] | length')
-          TOTAL_COVERAGE=$(echo $COMBINED_TEST_RESULT | jq -r '[.result.codecoverage[]? | select(.type == "ApexClass") | .coveredPercent] | add')
-
-          echo "Total Apex Classes: $CLASS_COUNT"
-          echo "Sum of All Coverage: ${TOTAL_COVERAGE}%"
-          echo "Weighted Average: ${COMBINED_COVERAGE}%"
-          echo ""
-
-          if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ]; then
-            echo "❌ Error: Could not retrieve combined coverage"
+          # Read the stored existing and new classes data
+          if [ ! -f /tmp/existing_classes.json ]; then
+            echo "❌ Error: Could not find existing classes data"
             exit 1
           fi
 
+          if [ ! -f /tmp/new_classes.json ]; then
+            echo "⚠️  Warning: No new classes data found, assuming no Apex changes"
+            echo '[]' > /tmp/new_classes.json
+          fi
+
+          # Get list of new/changed class names
+          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' 2>/dev/null | sort | uniq)
+
+          echo "New/Changed Classes Detected:"
+          echo "-----------------------------"
+          if [ -z "$NEW_CLASS_NAMES" ]; then
+            echo "None"
+          else
+            echo "$NEW_CLASS_NAMES"
+          fi
+          echo ""
+
+          # Filter existing classes to exclude new/changed ones (to avoid double counting)
+          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
+            [.[] | select(.name != null and ($new_names | contains(.name) | not))]
+          ' 2>/dev/null || echo '[]')
+
+          # Get counts and sums
+          EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
+          EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+
+          NEW_COUNT=$(cat /tmp/new_classes.json | jq -s 'length' 2>/dev/null || echo "0")
+          NEW_SUM=$(cat /tmp/new_classes.json | jq -s '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+
+          TOTAL_CLASSES=$((EXISTING_ONLY_COUNT + NEW_COUNT))
+          TOTAL_SUM=$(echo "scale=2; $EXISTING_ONLY_SUM + $NEW_SUM" | bc 2>/dev/null || echo "0")
+
+          # Calculate combined coverage
+          if [ "$TOTAL_CLASSES" -gt 0 ]; then
+            COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc 2>/dev/null || echo "0")
+          else
+            echo "❌ Error: No classes found for coverage calculation"
+            exit 1
+          fi
+
+          echo "📊 Coverage Calculation Details:"
+          echo "--------------------------------"
+          echo "Existing Classes (unchanged):     $EXISTING_ONLY_COUNT classes"
+          echo "  └─ Coverage Sum:                ${EXISTING_ONLY_SUM}%"
+          echo ""
+          echo "New/Changed Classes:              $NEW_COUNT classes"
+          echo "  └─ Coverage Sum:                ${NEW_SUM}%"
+          echo ""
+          echo "Total Classes:                    $TOTAL_CLASSES classes"
+          echo "Total Coverage Sum:               ${TOTAL_SUM}%"
+          echo "Combined Average Coverage:        ${COMBINED_COVERAGE}%"
+          echo ""
+          echo "────────────────────────────────────────────────────"
+          echo ""
+
+          echo "📊 Coverage Summary:"
+          echo "-------------------"
+          echo "Initial QA Org Coverage:          ${{ steps.check_org_coverage.outputs.org_coverage }}%"
+          echo "Changed Classes Avg Coverage:     ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
+          echo "Combined Coverage (After Deploy): ${COMBINED_COVERAGE}%"
+          echo ""
+
+          # Display all classes with their coverage
+          echo "Detailed Per-Class Coverage:"
+          echo "----------------------------"
+          echo "Existing Classes (unchanged):"
+          echo "$EXISTING_ONLY" | jq -r '.[] | "  • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          echo ""
+          echo "New/Changed Classes:"
+          cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          echo ""
+
+          if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
+            echo "❌ Error: Could not calculate combined coverage"
+            exit 1
+          fi
+
+          # Check against 95% threshold
           if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
             echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold"
             echo "❌ The new deployment would bring overall org coverage below 95%"
+            echo ""
+            echo "💡 Recommendation: Improve test coverage for the new/changed classes before deploying"
             echo ""
             echo "⚠️  DEPLOYMENT BLOCKED - Please improve test coverage before deploying"
             exit 1
@@ -947,7 +1001,7 @@ jobs:
           echo "======================================================"
           echo ""
           echo "✅ All coverage validations passed:"
-          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥90%)"
+          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥95%)"
           echo "   • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}% (required: ≥75%)"
           echo "   • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
           echo ""
