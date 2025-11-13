@@ -830,42 +830,65 @@ jobs:
           echo "Analyzing Coverage for Changed Files"
           echo "======================================================"
 
+          # Extract actual changed Apex class names from file paths
+          CHANGED_CLASS_NAMES=$(grep "\.cls$" salesforce-changes.txt | grep -v "Test\.cls$" | sed 's|.*/\([^/]*\)\.cls|\1|' | sort | uniq)
+
+          echo "Changed Apex Classes (from git diff):"
+          echo "-------------------------------------"
+          if [ -z "$CHANGED_CLASS_NAMES" ]; then
+            echo "None"
+          else
+            echo "$CHANGED_CLASS_NAMES"
+          fi
+          echo ""
+
+          # Save changed class names to file for later use
+          echo "$CHANGED_CLASS_NAMES" > /tmp/changed_class_names.txt
+
           # Get detailed validation report
           DEPLOY_REPORT=$(sf project deploy report \
             --job-id ${{ steps.validate.outputs.job-id }} \
             --target-org QAOrg \
             --json)
 
+          # Store ALL classes coverage data from validation (for reference)
+          echo $DEPLOY_REPORT | jq -r '
+            .result.details.runTestResult.codeCoverage[]? 
+            | select(.name != null and .type == "Class") 
+            | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+          ' > /tmp/all_validation_classes.json || true
+
           echo "📊 Coverage Analysis for Changed Apex Classes:"
           echo "----------------------------------------------"
 
-          # Extract coverage for each changed Apex class
-          CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-            .result.details.runTestResult.codeCoverage[]? 
-            | select(.name != null and .type == "Class") 
-            | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
-          ' 2>/dev/null || echo "")
-
-          if [ -z "$CHANGED_CLASSES_COVERAGE" ]; then
+          # Extract coverage ONLY for the actually changed classes
+          if [ -z "$CHANGED_CLASS_NAMES" ]; then
             echo "ℹ️  No Apex class changes detected in this deployment"
             echo "validation_coverage=100" >> $GITHUB_OUTPUT
           else
-            echo "$CHANGED_CLASSES_COVERAGE"
+            # Filter validation results to only show changed classes
+            CHANGED_CLASSES_COVERAGE=""
+            while IFS= read -r class_name; do
+              if [ ! -z "$class_name" ]; then
+                coverage_info=$(cat /tmp/all_validation_classes.json | jq -r --arg name "$class_name" '
+                  select(.name == $name) | "\(.name): \(.percent | floor)% (\(.lines) lines)"
+                ' 2>/dev/null)
+                if [ ! -z "$coverage_info" ]; then
+                  echo "$coverage_info"
+                  CHANGED_CLASSES_COVERAGE="${CHANGED_CLASSES_COVERAGE}${coverage_info}\n"
+                fi
+              fi
+            done <<< "$CHANGED_CLASS_NAMES"
             echo ""
             
-            # Store new classes data for later comparison
-            echo $DEPLOY_REPORT | jq -r '
-              .result.details.runTestResult.codeCoverage[]? 
-              | select(.name != null and .type == "Class") 
-              | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-            ' > /tmp/new_classes.json || true
+            # Store ONLY the actually changed classes data
+            cat /tmp/all_validation_classes.json | jq -s --arg names "$CHANGED_CLASS_NAMES" '
+              [.[] | select(.name != null and ($names | contains(.name)))]
+            ' | jq '.[]' > /tmp/new_classes.json 2>/dev/null || echo '[]' > /tmp/new_classes.json
             
-            # Calculate average coverage for changed classes
-            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-              [.result.details.runTestResult.codeCoverage[]? 
-              | select(.name != null and .type == "Class") 
-              | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end] 
-              | if length > 0 then (add / length) else 100 end
+            # Calculate average coverage for ONLY the changed classes
+            VALIDATION_COVERAGE=$(cat /tmp/new_classes.json | jq -s '
+              if length > 0 then ([.[].percent] | add / length) else 100 end
             ' 2>/dev/null || echo "0")
             
             echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
@@ -900,31 +923,40 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f /tmp/new_classes.json ]; then
-            echo "⚠️  Warning: No new classes data found, assuming no Apex changes"
-            echo '[]' > /tmp/new_classes.json
+          if [ ! -f /tmp/changed_class_names.txt ]; then
+            echo "⚠️  Warning: No changed class names found"
+            echo "" > /tmp/changed_class_names.txt
           fi
 
-          # Get list of new/changed class names
-          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' 2>/dev/null | sort | uniq)
+          # Get the list of actually changed class names from git diff
+          CHANGED_CLASS_NAMES=$(cat /tmp/changed_class_names.txt | tr '\n' '|' | sed 's/|$//')
 
-          echo "New/Changed Classes Detected:"
-          echo "-----------------------------"
-          if [ -z "$NEW_CLASS_NAMES" ]; then
+          echo "Classes Modified in This Commit:"
+          echo "--------------------------------"
+          if [ -z "$CHANGED_CLASS_NAMES" ]; then
             echo "None"
           else
-            echo "$NEW_CLASS_NAMES"
+            cat /tmp/changed_class_names.txt
           fi
           echo ""
 
-          # Filter existing classes to exclude new/changed ones (to avoid double counting)
-          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
-            [.[] | select(.name != null and ($new_names | contains(.name) | not))]
-          ' 2>/dev/null || echo '[]')
+          # Filter existing classes to exclude the changed ones
+          if [ -z "$CHANGED_CLASS_NAMES" ]; then
+            EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s '[.[]]')
+          else
+            EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg changed "$CHANGED_CLASS_NAMES" '
+              [.[] | select(.name != null and (.name | test($changed) | not))]
+            ' 2>/dev/null || echo '[]')
+          fi
 
           # Get counts and sums
           EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
           EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+
+          # Get new/changed classes data (only the actually changed ones)
+          if [ ! -f /tmp/new_classes.json ]; then
+            echo '[]' > /tmp/new_classes.json
+          fi
 
           NEW_COUNT=$(cat /tmp/new_classes.json | jq -s 'length' 2>/dev/null || echo "0")
           NEW_SUM=$(cat /tmp/new_classes.json | jq -s '[.[].percent] | add // 0' 2>/dev/null || echo "0")
@@ -966,10 +998,18 @@ jobs:
           echo "Detailed Per-Class Coverage:"
           echo "----------------------------"
           echo "Existing Classes (unchanged):"
-          echo "$EXISTING_ONLY" | jq -r '.[] | "  • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          if [ "$EXISTING_ONLY_COUNT" -eq 0 ]; then
+            echo "  None"
+          else
+            echo "$EXISTING_ONLY" | jq -r '.[] | "  • \(.name): \(.percent)%"' 2>/dev/null
+          fi
           echo ""
           echo "New/Changed Classes:"
-          cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          if [ "$NEW_COUNT" -eq 0 ]; then
+            echo "  None"
+          else
+            cat /tmp/new_classes.json | jq -s '.[] | "  • \(.name): \(.percent)%"' 2>/dev/null
+          fi
           echo ""
 
           if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
