@@ -926,7 +926,7 @@ jobs:
             exit 1
           fi
 
-          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
+          if (( $(echo "$COMBINED_COVERAGE < 200" | bc -l) )); then
             echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
             echo "❌ The new deployment would bring overall org coverage below 90%"
             echo ""
