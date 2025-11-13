@@ -1,4 +1,4 @@
-// tests
+// tes
 @isTest
 private class StringUtilityTest {
   @isTest
