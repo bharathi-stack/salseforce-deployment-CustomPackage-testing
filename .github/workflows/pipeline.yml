@@ -851,12 +851,16 @@ jobs:
             --target-org QAOrg \
             --json)
 
-          # Store ALL classes coverage data from validation (for reference)
-          echo $DEPLOY_REPORT | jq -r '
+          # Store ALL classes coverage data from validation
+          echo "$DEPLOY_REPORT" | jq -r '
             .result.details.runTestResult.codeCoverage[]? 
             | select(.name != null and .type == "Class") 
             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-          ' > /tmp/all_validation_classes.json || true
+          ' > /tmp/all_validation_classes.json 2>/dev/null || echo '[]' > /tmp/all_validation_classes.json
+
+          echo "Debug: All classes from validation report:"
+          cat /tmp/all_validation_classes.json | jq -s '.[] | .name' 2>/dev/null || echo "No data"
+          echo ""
 
           echo "📊 Coverage Analysis for Changed Apex Classes:"
           echo "----------------------------------------------"
@@ -864,31 +868,44 @@ jobs:
           # Extract coverage ONLY for the actually changed classes
           if [ -z "$CHANGED_CLASS_NAMES" ]; then
             echo "ℹ️  No Apex class changes detected in this deployment"
+            echo '[]' > /tmp/new_classes.json
             echo "validation_coverage=100" >> $GITHUB_OUTPUT
           else
+            # Initialize empty array for new classes
+            echo '[]' > /tmp/new_classes_temp.json
+            
             # Filter validation results to only show changed classes
-            CHANGED_CLASSES_COVERAGE=""
             while IFS= read -r class_name; do
               if [ ! -z "$class_name" ]; then
-                coverage_info=$(cat /tmp/all_validation_classes.json | jq -r --arg name "$class_name" '
-                  select(.name == $name) | "\(.name): \(.percent | floor)% (\(.lines) lines)"
+                # Find coverage for this specific class
+                coverage_data=$(cat /tmp/all_validation_classes.json | jq -s --arg name "$class_name" '
+                  [.[] | select(.name == $name)] | if length > 0 then .[0] else empty end
                 ' 2>/dev/null)
-                if [ ! -z "$coverage_info" ]; then
-                  echo "$coverage_info"
-                  CHANGED_CLASSES_COVERAGE="${CHANGED_CLASSES_COVERAGE}${coverage_info}\n"
+                
+                if [ ! -z "$coverage_data" ] && [ "$coverage_data" != "null" ]; then
+                  percent=$(echo "$coverage_data" | jq -r '.percent // 0')
+                  lines=$(echo "$coverage_data" | jq -r '.lines // 0')
+                  echo "${class_name}: ${percent}% (${lines} lines)"
+                  
+                  # Append to new_classes array
+                  echo "$coverage_data" >> /tmp/new_classes_temp.json
+                else
+                  echo "⚠️  Warning: No coverage data found for ${class_name} in validation report"
                 fi
               fi
             done <<< "$CHANGED_CLASS_NAMES"
+            
+            # Convert temp file to proper JSON array
+            cat /tmp/new_classes_temp.json | jq -s '.' > /tmp/new_classes.json 2>/dev/null || echo '[]' > /tmp/new_classes.json
+            
+            echo ""
+            echo "Debug: New classes data saved:"
+            cat /tmp/new_classes.json
             echo ""
             
-            # Store ONLY the actually changed classes data
-            cat /tmp/all_validation_classes.json | jq -s --arg names "$CHANGED_CLASS_NAMES" '
-              [.[] | select(.name != null and ($names | contains(.name)))]
-            ' | jq '.[]' > /tmp/new_classes.json 2>/dev/null || echo '[]' > /tmp/new_classes.json
-            
             # Calculate average coverage for ONLY the changed classes
-            VALIDATION_COVERAGE=$(cat /tmp/new_classes.json | jq -s '
-              if length > 0 then ([.[].percent] | add / length) else 100 end
+            VALIDATION_COVERAGE=$(cat /tmp/new_classes.json | jq -r '
+              if length > 0 then ([.[].percent] | add / length) else 0 end
             ' 2>/dev/null || echo "0")
             
             echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
