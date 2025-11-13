@@ -774,7 +774,7 @@ jobs:
             --test-level RunLocalTests \
             --target-org QAOrg \
             --json)
-
+          echo "Result :: $VALIDATE_JSON"
           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
           if [ "$STATUS" != "0" ]; then
             echo "❌ Validation failed! Response: $VALIDATE_JSON"
