@@ -743,6 +743,33 @@ jobs:
           echo "✓ QA org meets the 90% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
+      - name: Store Existing Classes Coverage
+        id: store_existing_coverage
+        run: |
+          echo "======================================================"
+          echo "Storing Existing Classes Coverage Data"
+          echo "======================================================"
+          echo "Fetching existing Apex classes coverage from QA org..."
+
+          # Get all existing classes and their coverage
+          TEST_RESULT=$(sf apex run test \
+            --target-org QAOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json) || true
+
+          # Extract and store existing classes data
+          echo $TEST_RESULT | jq -r '
+            .result.coverage.coverage[]? 
+            | select(.name != null and .type == "Class") 
+            | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+          ' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
+
+          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq -s 'length' 2>/dev/null || echo "0")
+          echo "📦 Stored coverage data for $EXISTING_COUNT existing classes"
+          echo ""
+
       - name: Find changed metadata files
         id: find_files
         run: |
@@ -790,7 +817,7 @@ jobs:
             --test-level RunLocalTests \
             --target-org QAOrg \
             --json) || true
-            
+          echo "result: $VALIDATE_JSON"  
           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
           if [ "$STATUS" != "0" ]; then
             echo "❌ Validation failed! Response: $VALIDATE_JSON"
@@ -884,12 +911,14 @@ jobs:
           echo "======================================================"
           echo ""
 
-          # Read the stored existing and new classes data
+          # Verify existing classes data file exists
           if [ ! -f /tmp/existing_classes.json ]; then
             echo "❌ Error: Could not find existing classes data"
+            echo "⚠️  This file should have been created in the 'Store Existing Classes Coverage' step"
             exit 1
           fi
 
+          # Create new classes file if it doesn't exist
           if [ ! -f /tmp/new_classes.json ]; then
             echo "⚠️  Warning: No new classes data found, assuming no Apex changes"
             echo '[]' > /tmp/new_classes.json
@@ -991,7 +1020,7 @@ jobs:
           echo "======================================================"
           echo ""
           echo "✅ All coverage validations passed:"
-          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥95%)"
+          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥90%)"
           echo "   • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}% (required: ≥75%)"
           echo "   • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
           echo ""
