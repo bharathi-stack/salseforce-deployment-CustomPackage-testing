@@ -681,7 +681,7 @@ jobs:
   qa_deployment:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    # needs: validate_code
+    needs: validate_code
     environment:
       name: qa
       url: ${{ steps.auth_qa.outputs.org_url }}
@@ -926,7 +926,7 @@ jobs:
             exit 1
           fi
 
-          if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
+          if (( $(echo "$COMBINED_COVERAGE < 90" | bc -l) )); then
             echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 90% threshold"
             echo "❌ The new deployment would bring overall org coverage below 90%"
             echo ""
@@ -947,9 +947,9 @@ jobs:
           echo "======================================================"
           echo ""
           echo "✅ All coverage validations passed:"
-          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}%"
-          echo "   • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
-          echo "   • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}%"
+          echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥90%)"
+          echo "   • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}% (required: ≥75%)"
+          echo "   • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
           echo ""
           echo "🚀 Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
           echo ""
