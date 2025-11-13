@@ -774,7 +774,7 @@ jobs:
             --test-level RunLocalTests \
             --target-org QAOrg \
             --json)
-          echo "Result :: $VALIDATE_JSON"
+
           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
           if [ "$STATUS" != "0" ]; then
             echo "❌ Validation failed! Response: $VALIDATE_JSON"
@@ -865,18 +865,29 @@ jobs:
             [.[] | select(.name != null and ($new_names | contains(.name) | not))]
           ' 2>/dev/null || echo '[]')
 
-          # Calculate totals
-          EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
-          NEW_SUM=$(cat /tmp/new_classes.json | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
-          EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
-          NEW_COUNT=$(cat /tmp/new_classes.json | jq 'length' 2>/dev/null || echo "0")
+          # Calculate totals with proper handling
+          EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null)
+          NEW_SUM=$(cat /tmp/new_classes.json | jq '[.[].percent] | add // 0' 2>/dev/null)
+          EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null)
+          NEW_COUNT=$(cat /tmp/new_classes.json | jq 'length' 2>/dev/null)
+
+          # Ensure numeric values (default to 0 if empty/null)
+          EXISTING_ONLY_SUM=${EXISTING_ONLY_SUM:-0}
+          NEW_SUM=${NEW_SUM:-0}
+          EXISTING_ONLY_COUNT=${EXISTING_ONLY_COUNT:-0}
+          NEW_COUNT=${NEW_COUNT:-0}
+
+          # Convert null to 0
+          [ "$EXISTING_ONLY_SUM" = "null" ] && EXISTING_ONLY_SUM=0
+          [ "$NEW_SUM" = "null" ] && NEW_SUM=0
 
           TOTAL_CLASSES=$((EXISTING_ONLY_COUNT + NEW_COUNT))
-          TOTAL_SUM=$(echo "scale=2; $EXISTING_ONLY_SUM + $NEW_SUM" | bc)
 
           [ "$TOTAL_CLASSES" -eq 0 ] && echo "❌ No classes found" && exit 1
 
-          COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc)
+          # Calculate combined coverage with bc
+          TOTAL_SUM=$(echo "$EXISTING_ONLY_SUM + $NEW_SUM" | bc 2>/dev/null)
+          COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc 2>/dev/null)
 
           echo "📊 Coverage Summary:"
           echo "-------------------"
