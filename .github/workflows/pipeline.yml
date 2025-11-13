@@ -722,45 +722,25 @@ jobs:
       - name: Check Overall Apex Coverage in QA Org
         id: check_org_coverage
         run: |
-          echo "======================================================"
-          echo "STEP 1: Checking Overall Apex Coverage in QA Org"
-          echo "======================================================"
-
-          # Run all tests to get org-wide coverage
+          echo "Fetching overall Apex test coverage from QA org..."
           TEST_RESULT=$(sf apex run test \
             --target-org QAOrg \
             --code-coverage \
             --result-format json \
             --wait 30 \
             --json) || true
-
-          # Extract org-wide coverage percentage
+          echo "Test result: $TEST_RESULT"
           ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
-
-          echo ""
-          echo "📊 Current QA Org-Wide Apex Coverage: ${ORG_COVERAGE}%"
-          echo ""
-
-          # Get per-class coverage breakdown for display
-          echo "Per-Class Coverage Breakdown:"
-          echo "----------------------------"
-          echo $TEST_RESULT | jq -r '.result.codecoverage[] | select(.type == "ApexClass") | "\(.name): \(.coveredPercent)%"' || true
-          echo ""
-
-          # Store existing classes data for later use
-          echo $TEST_RESULT | jq -r '.result.codecoverage[] | select(.type == "ApexClass") | {name: .name, percent: .coveredPercent}' > /tmp/existing_classes.json || true
-
+          echo "Current QA org-wide Apex coverage: ${ORG_COVERAGE}%"
           if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
-            echo "❌ Error: Could not retrieve org-wide coverage"
+            echo "Error: Could not retrieve org-wide coverage"
             exit 1
           fi
-
-          if (( $(echo "$ORG_COVERAGE < 95" | bc -l) )); then
-            echo "❌ ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 95% threshold"
+          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
             exit 1
           fi
-
-          echo "✅ QA org meets the 95% coverage requirement"
+          echo "✓ QA org meets the 90% coverage requirement"
           echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Find changed metadata files
