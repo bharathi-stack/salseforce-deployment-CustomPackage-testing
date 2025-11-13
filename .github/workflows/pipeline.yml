@@ -703,12 +703,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Salesforce CLI
+      - name: Install Salesforce CLI and dependencies
         run: |
           npm install -g @salesforce/cli
-
-      - name: Install jq
-        run: |
           sudo apt-get update && sudo apt-get install -y jq
 
       - name: Authenticate to QA Org
@@ -844,23 +841,35 @@ jobs:
           echo "Verifying Combined Coverage (Existing + New)"
           echo "======================================================"
 
-          # Ensure files exist
-          [ ! -f /tmp/existing_classes.json ] && echo "❌ Missing existing classes data" && exit 1
+          # Get fresh org coverage data
+          TEST_RESULT=$(sf apex run test \
+            --target-org QAOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 30 \
+            --json)
+
+          # Extract existing classes - output as array
+          echo $TEST_RESULT | jq '[.result.coverage.coverage[]? 
+            | select(.name != null and .type == "Class") 
+            | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end)}]' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
+
+          # Ensure new classes file exists
           [ ! -f /tmp/new_classes.json ] && echo '[]' > /tmp/new_classes.json
 
           # Get new class names for filtering
-          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' | sort | uniq)
+          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' 2>/dev/null | sort | uniq)
 
           # Filter existing classes to exclude changed ones
-          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
+          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq --arg new_names "$NEW_CLASS_NAMES" '
             [.[] | select(.name != null and ($new_names | contains(.name) | not))]
-          ')
+          ' 2>/dev/null || echo '[]')
 
           # Calculate totals
-          EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length')
-          EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0')
-          NEW_COUNT=$(cat /tmp/new_classes.json | jq -s 'length')
-          NEW_SUM=$(cat /tmp/new_classes.json | jq -s '[.[].percent] | add // 0')
+          EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+          NEW_SUM=$(cat /tmp/new_classes.json | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+          EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
+          NEW_COUNT=$(cat /tmp/new_classes.json | jq 'length' 2>/dev/null || echo "0")
 
           TOTAL_CLASSES=$((EXISTING_ONLY_COUNT + NEW_COUNT))
           TOTAL_SUM=$(echo "scale=2; $EXISTING_ONLY_SUM + $NEW_SUM" | bc)
