@@ -1,4 +1,4 @@
-// File: MyCalculatorTest.cls
+// File: MyCalculatorTest.clss
 @isTest
 private class MyCalculatorTest {
   @isTest
