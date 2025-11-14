@@ -904,7 +904,8 @@ jobs:
 
       - name: Check Combined Coverage Before Deployment
         id: check_combined_coverage
-        if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        # if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        if: steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "======================================================"
           echo "STEP 3: Verifying Combined Coverage (Existing + New)"
