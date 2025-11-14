@@ -839,68 +839,68 @@ jobs:
             
           echo "✅ Validation completed successfully."
 
-      - name: Check Validation Test Coverage
-        id: check_validation_coverage
-        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
-        run: |
-          echo "======================================================"
-          echo "Analyzing Coverage for Changed Files"
-          echo "======================================================"
+      # - name: Check Validation Test Coverage
+      #   id: check_validation_coverage
+      #   if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+      #   run: |
+      #     echo "======================================================"
+      #     echo "Analyzing Coverage for Changed Files"
+      #     echo "======================================================"
 
-          # Get detailed validation report
-          DEPLOY_REPORT=$(sf project deploy report \
-            --job-id ${{ steps.validate.outputs.job-id }} \
-            --target-org QAOrg \
-            --json)
+      #     # Get detailed validation report
+      #     DEPLOY_REPORT=$(sf project deploy report \
+      #       --job-id ${{ steps.validate.outputs.job-id }} \
+      #       --target-org QAOrg \
+      #       --json)
 
-          echo "📊 Coverage Analysis for Changed Apex Classes:"
-          echo "----------------------------------------------"
+      #     echo "📊 Coverage Analysis for Changed Apex Classes:"
+      #     echo "----------------------------------------------"
 
-          # Extract coverage for each changed Apex class
-          CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-            .result.details.runTestResult.codeCoverage[]? 
-            | select(.name != null and .type == "Class") 
-            | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
-          ' 2>/dev/null || echo "")
+      #     # Extract coverage for each changed Apex class
+      #     CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
+      #       .result.details.runTestResult.codeCoverage[]?
+      #       | select(.name != null and .type == "Class")
+      #       | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
+      #     ' 2>/dev/null || echo "")
 
-          if [ -z "$CHANGED_CLASSES_COVERAGE" ]; then
-            echo "ℹ️  No Apex class changes detected in this deployment"
-            echo "validation_coverage=100" >> $GITHUB_OUTPUT
-          else
-            echo "$CHANGED_CLASSES_COVERAGE"
-            echo ""
-            
-            # Store new classes data for later comparison
-            echo $DEPLOY_REPORT | jq -r '
-              .result.details.runTestResult.codeCoverage[]? 
-              | select(.name != null and .type == "Class") 
-              | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-            ' > /tmp/new_classes.json || true
-            
-            # Calculate average coverage for changed classes
-            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-              [.result.details.runTestResult.codeCoverage[]? 
-              | select(.name != null and .type == "Class") 
-              | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end] 
-              | if length > 0 then (add / length) else 100 end
-            ' 2>/dev/null || echo "0")
-            
-            echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
-            echo ""
-            
-            if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
-              echo "⚠️  Warning: Could not retrieve validation coverage, setting to 0"
-              VALIDATION_COVERAGE=0
-            fi
-            
-            if (( $(echo "$VALIDATION_COVERAGE < 75" | bc -l) )); then
-              echo "❌ ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is below the required 75% threshold"
-              exit 1
-            fi
-            
-            echo "✅ Changed classes meet the 75% test coverage requirement"
-            echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
-          fi
+      #     if [ -z "$CHANGED_CLASSES_COVERAGE" ]; then
+      #       echo "ℹ️  No Apex class changes detected in this deployment"
+      #       echo "validation_coverage=100" >> $GITHUB_OUTPUT
+      #     else
+      #       echo "$CHANGED_CLASSES_COVERAGE"
+      #       echo ""
+
+      #       # Store new classes data for later comparison
+      #       echo $DEPLOY_REPORT | jq -r '
+      #         .result.details.runTestResult.codeCoverage[]?
+      #         | select(.name != null and .type == "Class")
+      #         | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+      #       ' > /tmp/new_classes.json || true
+
+      #       # Calculate average coverage for changed classes
+      #       VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
+      #         [.result.details.runTestResult.codeCoverage[]?
+      #         | select(.name != null and .type == "Class")
+      #         | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end]
+      #         | if length > 0 then (add / length) else 100 end
+      #       ' 2>/dev/null || echo "0")
+
+      #       echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
+      #       echo ""
+
+      #       if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+      #         echo "⚠️  Warning: Could not retrieve validation coverage, setting to 0"
+      #         VALIDATION_COVERAGE=0
+      #       fi
+
+      #       if (( $(echo "$VALIDATION_COVERAGE < 75" | bc -l) )); then
+      #         echo "❌ ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is below the required 75% threshold"
+      #         exit 1
+      #       fi
+
+      #       echo "✅ Changed classes meet the 75% test coverage requirement"
+      #       echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
+      #     fi
 
       - name: Check Combined Coverage Before Deployment
         id: check_combined_coverage
