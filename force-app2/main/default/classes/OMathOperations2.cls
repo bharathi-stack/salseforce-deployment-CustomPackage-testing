@@ -1,4 +1,5 @@
-// testing
+// CORRECT CODE
+// testings
 public class OMathOperations2 {
   /**
    * @description Multiplies 5 and 5 together.
@@ -22,7 +23,8 @@ public class OMathOperations2 {
     return result;
   }
 }
-// hi
+
+// VIOLATIONS
 // // testingsss - Now with PMD Violations
 // global class OMathOperations2 { // VIOLATION: AvoidGlobalModifier (Severity 3)
 //   /**
