@@ -2,7 +2,7 @@
 @isTest
 private class MyCalculatorTest {
   @isTest
-  static void testDivide_HappyPath() {
+  static void testDivideHappyPath() {
     // We only test the case where denominator is NOT zero
     Decimal result = MyCalculator.divide(10, 2);
 

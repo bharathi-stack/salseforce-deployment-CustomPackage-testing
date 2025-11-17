@@ -691,7 +691,7 @@ jobs:
   qa_deployment:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    # needs: validate_code
+    needs: validate_code
     environment:
       name: qa
       url: ${{ steps.auth_qa.outputs.org_url }}
