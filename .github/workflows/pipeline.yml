@@ -1408,7 +1408,7 @@ jobs:
           # Create new classes file if it doesn't exist
           if [ ! -f /tmp/new_classes.json ]; then
             echo "⚠️  Warning: No new classes data found, assuming no Apex changes"
-            echo '' > /tmp/new_classes.json
+            echo '[]' > /tmp/new_classes.json
           fi
 
           # Get list of new/changed class names
@@ -1442,34 +1442,40 @@ jobs:
           if [ "$TOTAL_CLASSES" -gt 0 ]; then
             COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc 2>/dev/null || echo "0")
           else
-            echo "ℹ️ No classes found for coverage calculation. Skipping check."
-            COMBINED_COVERAGE=100
+            echo "❌ Error: No classes found for coverage calculation"
+            exit 1
           fi
 
           echo "📊 Coverage Calculation Details:"
           echo "--------------------------------"
-          echo "Existing (Unchanged) Classes:   $EXISTING_ONLY_COUNT"
-          echo "New/Changed Classes:            $NEW_COUNT"
-          echo "Total Classes:                  $TOTAL_CLASSES classes"
-          echo "Total Coverage Sum:             ${TOTAL_SUM}%"
-          echo "Combined Average Coverage:      ${COMBINED_COVERAGE}%"
-          echo "Required Threshold:             95%"
-          echo "--------------------------------"
+          echo "Existing Classes (unchanged):    $EXISTING_ONLY_COUNT classes"
+          echo "  └─ Coverage Sum:                ${EXISTING_ONLY_SUM}%"
+          echo ""
+          echo "New/Changed Classes:             $NEW_COUNT classes"
+          echo "  └─ Coverage Sum:                ${NEW_SUM}%"
+          echo ""
+          echo "Total Classes:                   $TOTAL_CLASSES classes"
+          echo "Total Coverage Sum:              ${TOTAL_SUM}%"
+          echo "Combined Average Coverage:       ${COMBINED_COVERAGE}%"
+          echo ""
+          echo "────────────────────────────────────────────────────"
+          echo ""
+
+          echo "📊 Coverage Summary:"
+          echo "-------------------"
+          echo "Changed Classes Avg Coverage:    ${{ steps.validate_delta.outputs.validation_coverage }}%"
+          echo "Combined Coverage (After Deploy): ${COMBINED_COVERAGE}%"
+          echo "Required Threshold:              95%"
           echo ""
 
           # Display all classes with their coverage
           echo "Detailed Per-Class Coverage:"
           echo "----------------------------"
-          echo "Existing Classes (unchanged) - Top 10:"
-          echo "$EXISTING_ONLY" | jq -r 'sort_by(-.percent) | .[0:10] | .[] | "  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
-
-          if [ "$EXISTING_ONLY_COUNT" -gt 10 ]; then
-            echo "  ... and $((EXISTING_ONLY_COUNT - 10)) more"
-          fi
+          echo "Existing Classes (unchanged):"
+          echo "$EXISTING_ONLY" | jq -r '.[] | "   • \(.name): \(.percent | floor)%"' 2>/dev/null || echo "  None"
           echo ""
-
           echo "New/Changed Classes:"
-          cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
+          cat /tmp/new_classes.json | jq -r '"   • \(.name): \(.percent | floor)%"' 2>/dev/null || echo "  None"
           echo ""
 
           if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
@@ -1479,20 +1485,17 @@ jobs:
 
           # Check against 95% threshold
           if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
-            echo "❌ ERROR: Combined average coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold."
+            echo "❌ ERROR: Combined coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold"
             echo "❌ The new deployment would bring overall org coverage below 95%"
             echo ""
-            echo "💡 Recommendations:"
-            echo "  1. Improve test coverage for new/changed classes"
-            echo "  2. Add tests for existing classes with low coverage"
-            echo "  3. Review classes with 0% coverage"
+            echo "💡 Recommendation: Improve test coverage for the new/changed classes before deploying"
             echo ""
-            echo "⚠️  VALIDATION BLOCKED - Please improve test coverage."
+            echo "⚠️  DEPLOYMENT BLOCKED - Please improve test coverage before deploying"
             exit 1
           fi
 
-          echo "✅ Combined coverage meets the 95% requirement."
-          echo "✅ Validation successful - Ready for deployment."
+          echo "✅ Combined coverage meets the 95% requirement"
+          echo "✅ Deployment is approved to proceed"
           echo ""
           echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
 
@@ -1510,6 +1513,7 @@ jobs:
             --verbose
           echo ""
           echo "✅ Deployment completed successfully!"
+
   # ========================================
   # 3. THIRD JOB: Validate & Deploy to Sandbox
   # ========================================
