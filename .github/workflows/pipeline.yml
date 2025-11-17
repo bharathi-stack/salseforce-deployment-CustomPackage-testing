@@ -1323,21 +1323,117 @@ jobs:
             echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
           fi
 
-      - name: Find changed metadata files
-        id: find_files
+      - name: check the 11111111Validate Delta against QA Org
+        id: validate
+        if: steps.find_files.outputs.delta_exists == 'true'
         run: |
-          # Use the delta_exists output from validate_delta step
-          if [ "${{ steps.validate_delta.outputs.delta_exists }}" == "true" ]; then
-            echo "✅ Salesforce changes detected (already validated)."
-            echo "delta_exists=true" >> $GITHUB_OUTPUT
+          echo "======================================================"
+          echo "STEP 2: Validating Delta Changes"
+          echo "======================================================"
+
+          SOURCE_ARGS=""
+          while read -r file_path; do
+            SOURCE_ARGS="$SOURCE_ARGS --source-dir $file_path"
+          done < salesforce-changes.txt
+
+          echo "--- Validating the following files ---"
+          echo $SOURCE_ARGS
+          echo "--------------------------------------"
+          echo ""
+
+          VALIDATE_JSON=$(sf project deploy validate \
+            $SOURCE_ARGS \
+            --test-level RunLocalTests \
+            --target-org QAOrg \
+            --json) || true
+          echo "result: $VALIDATE_JSON"  
+          STATUS=$(echo $VALIDATE_JSON | jq -r .status)
+          if [ "$STATUS" != "0" ]; then
+            echo "❌ Validation failed! Response: $VALIDATE_JSON"
+            exit 1
+          fi
+
+          JOB_ID=$(echo $VALIDATE_JSON | jq -r .result.id)
+          echo "✅ Validation started. Job ID: $JOB_ID"
+          echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for Validation to Complete
+        id: wait_step
+        if: steps.validate.outputs.job-id && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "⏳ Waiting for validation (Job ID: ${{ steps.validate.outputs.job-id }}) to complete..."
+          sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org QAOrg
+            
+          echo "✅ Validation completed successfully."
+
+      - name: Check Validation Test Coverage
+        id: check_validation_coverage
+        if: steps.wait_step.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "======================================================"
+          echo "Analyzing Coverage for Changed Files"
+          echo "======================================================"
+
+          # Get detailed validation report
+          DEPLOY_REPORT=$(sf project deploy report \
+            --job-id ${{ steps.validate.outputs.job-id }} \
+            --target-org QAOrg \
+            --json)
+
+          echo "📊 Coverage Analysis for Changed Apex Classes:"
+          echo "----------------------------------------------"
+
+          # Extract coverage for each changed Apex class
+          CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
+            .result.details.runTestResult.codeCoverage[]? 
+            | select(.name != null and .type == "Class") 
+            | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
+          ' 2>/dev/null || echo "")
+
+          if [ -z "$CHANGED_CLASSES_COVERAGE" ]; then
+            echo "ℹ️  No Apex class changes detected in this deployment"
+            echo "validation_coverage=100" >> $GITHUB_OUTPUT
           else
-            echo "ℹ️  No Salesforce metadata changes detected."
-            echo "delta_exists=false" >> $GITHUB_OUTPUT
+            echo "$CHANGED_CLASSES_COVERAGE"
+            echo ""
+            
+            # Store new classes data for later comparison
+            echo $DEPLOY_REPORT | jq -r '
+              .result.details.runTestResult.codeCoverage[]? 
+              | select(.name != null and .type == "Class") 
+              | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+            ' > /tmp/new_classes.json || true
+            
+            # Calculate average coverage for changed classes
+            VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
+              [.result.details.runTestResult.codeCoverage[]? 
+              | select(.name != null and .type == "Class") 
+              | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end] 
+              | if length > 0 then (add / length) else 100 end
+            ' 2>/dev/null || echo "0")
+            
+            echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
+            echo ""
+            
+            if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
+              echo "⚠️  Warning: Could not retrieve validation coverage, setting to 0"
+              VALIDATION_COVERAGE=0
+            fi
+            
+            if (( $(echo "$VALIDATION_COVERAGE < 75" | bc -l) )); then
+              echo "❌ ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is below the required 75% threshold"
+              exit 1
+            fi
+            
+            echo "✅ Changed classes meet the 75% test coverage requirement"
+            echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
           fi
 
       - name: Check Combined Coverage Before Deployment
         id: check_combined_coverage
-        if: steps.find_files.outputs.delta_exists == 'true'
+        if: steps.check_validation_coverage.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "======================================================"
           echo "STEP 3: Verifying Combined Coverage (Existing + New)"
@@ -1410,7 +1506,7 @@ jobs:
           echo "📊 Coverage Summary:"
           echo "-------------------"
           echo "Initial QA Org Coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}%"
-          echo "Changed Classes Avg Coverage:   ${{ steps.validate_delta.outputs.validation_coverage }}%"
+          echo "Changed Classes Avg Coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}%"
           echo "Combined Coverage (After Deploy): ${COMBINED_COVERAGE}%"
           echo ""
 
@@ -1421,7 +1517,7 @@ jobs:
           echo "$EXISTING_ONLY" | jq -r '.[] | "   • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
           echo ""
           echo "New/Changed Classes:"
-          cat /tmp/new_classes.json | jq -r '"   • \(.name): \(if .totalLines > 0 then ((.coveredLines * 100 / .totalLines) | floor) else 0 end)%"' 2>/dev/null || echo "  None"
+          cat /tmp/new_classes.json | jq -r '"   • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
           echo ""
 
           if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
@@ -1454,14 +1550,14 @@ jobs:
           echo ""
           echo "✅ All coverage validations passed:"
           echo "   • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥90%)"
-          echo "   • Changed classes avg coverage:   ${{ steps.validate_delta.outputs.validation_coverage }}% (required: ≥75%)"
+          echo "   • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}% (required: ≥75%)"
           echo "   • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
           echo ""
-          echo "🚀 Deploying using Validation ID: ${{ steps.validate_delta.outputs.validation_id }}"
+          echo "🚀 Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
           echo ""
 
           sf project deploy quick \
-            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
+            --job-id ${{ steps.validate.outputs.job-id }} \
             --target-org QAOrg
 
           echo ""
