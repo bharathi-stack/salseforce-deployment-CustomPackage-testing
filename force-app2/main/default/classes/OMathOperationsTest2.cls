@@ -1,4 +1,4 @@
-// testingss
+// testings
 @isTest
 private class OMathOperationsTest2 {
   @isTest
