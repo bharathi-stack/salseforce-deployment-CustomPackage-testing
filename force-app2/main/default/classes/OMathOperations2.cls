@@ -1,4 +1,4 @@
-// CORRECT CODEss
+// CORRECT CODEs
 // testings
 public class OMathOperations2 {
   /**
