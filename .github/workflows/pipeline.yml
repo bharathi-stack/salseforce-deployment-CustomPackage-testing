@@ -1271,8 +1271,7 @@ jobs:
 
           # 2. Determine test level
           grep '/classes/.*\.cls$' salesforce-changes.txt > changed-apex-files.txt || true
-          TEST_LIST=$(grep -E '/classes/.*Test.*\.cls$' salesforce-changes.txt | sed 's|.*/\(.*\)\.cls$|\1|' | paste -sd, -)
-
+          TEST_LIST=$(grep -E '/classes/.*Test.*\.cls$' salesforce-changes.txt | sed 's|.*/\(.*\)\.cls$|\1|')
           TEST_LEVEL_ARGS=""
           if [ ! -s changed-apex-files.txt ]; then
             echo "ℹ️ No Apex classes found in changes. Setting test level to NoTestRun."
