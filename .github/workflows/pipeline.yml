@@ -1141,7 +1141,6 @@ jobs:
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
       # --- PREREQUISITE: Get all existing class coverage ---
-      # This is needed for the final combined coverage check in Stage 2
       - name: Store Existing Classes Coverage
         id: store_existing_coverage
         run: |
@@ -1156,14 +1155,22 @@ jobs:
             --wait 30 \
             --json) || true
 
-          # Extract and store existing classes data
+          # Check for test run failure
+          STATUS=$(echo $TEST_RESULT | jq -r .status)
+          if [ "$STATUS" != "0" ]; then
+            echo "❌ ERROR: The 'sf apex run test' command to get existing coverage failed."
+            echo "Response: $TEST_RESULT"
+            exit 1
+          fi
+
+          # Extract and store existing classes data as a JSON array
           echo $TEST_RESULT | jq -r '
             .result.coverage.coverage[]? 
             | select(.name != null and .type == "Class") 
             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-          ' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
+          ' | jq -s '.' > /tmp/existing_classes.json # -s "slurps" the stream of objects into one array
 
-          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq -s 'length' 2>/dev/null || echo "0")
+          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq 'length' 2>/dev/null || echo "0")
           echo "📦 Stored coverage data for $EXISTING_COUNT existing classes"
           echo ""
 
@@ -1224,7 +1231,6 @@ jobs:
 
           # 3. Run validation and wait for it to complete
           echo "⏳ Running validation and waiting for report..."
-          # Using --wait 20 to wait for the validation and get the final report in one step
           VALIDATE_JSON=$(sf project deploy validate \
             $SOURCE_ARGS \
             $TEST_LEVEL_ARGS \
@@ -1315,7 +1321,9 @@ jobs:
           echo ""
 
           # 3. Filter existing classes to exclude new/changed ones (to avoid double counting)
-          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
+          # *** BUG FIX HERE: Removed the '-s' (slurp) flag ***
+          # The file is already a JSON array, no need to re-wrap it.
+          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq --arg new_names "$NEW_CLASS_NAMES" '
             [.[] | select(.name != null and ($new_names | contains(.name) | not))]
           ' 2>/dev/null || echo '[]')
 
@@ -1363,7 +1371,6 @@ jobs:
 
           echo "✅ Combined coverage meets the 95% requirement."
           echo "✅ Validation successful."
-
   # ========================================
   # 3. THIRD JOB: Validate & Deploy to Sandbox
   # ========================================
