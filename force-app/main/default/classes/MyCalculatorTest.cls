@@ -29,7 +29,7 @@ private class MyCalculatorTest {
   }
 
   @isTest
-  static void test_divide_by_zero() {
+  static void testdividebyzero() {
     // This new test covers the "denominator == 0" branch
     Decimal result = MyCalculator.divide(10, 0);
 
