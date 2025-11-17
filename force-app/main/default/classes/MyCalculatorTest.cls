@@ -1,4 +1,4 @@
-// File: MyCalculatorTest.clsss (covers 100%)
+// File: MyCalculatorTest.clsss (covers 80%)
 // @isTest
 // private class MyCalculatorTest {
 //   @isTest
@@ -16,7 +16,7 @@
 
 // --------------------------------------
 
-// File: MyCalculatorTest.cls (covers only 80%)
+// File: MyCalculatorTest.cls (covers only 100%)
 @isTest
 private class MyCalculatorTest {
   @isTest
