@@ -14,7 +14,6 @@ private class MyCalculatorTest {
   //   // This is why the coverage will not be 100%.
 }
 
-
 // --------------------------------------
 
 // // File: MyCalculatorTest.cls (covers only 80%)
