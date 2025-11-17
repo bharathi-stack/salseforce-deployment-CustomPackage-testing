@@ -20,7 +20,7 @@
 @isTest
 private class MyCalculatorTest {
   @isTest
-  static void testDivide_HappyPath() {
+  static void test_divide_happy_path() {
     // This test covers the "happy path"
     Decimal result = MyCalculator.divide(10, 2);
 
@@ -29,7 +29,7 @@ private class MyCalculatorTest {
   }
 
   @isTest
-  static void testDivide_ByZero() {
+  static void test_divide_by_zero() {
     // This new test covers the "denominator == 0" branch
     Decimal result = MyCalculator.divide(10, 0);
 
