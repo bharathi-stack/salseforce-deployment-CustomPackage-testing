@@ -4,7 +4,7 @@ private class MyCalculatorTest {
   @isTest
   static void testDivide_HappyPath() {
     // We only test the case where denominator is NOT zero
-    Decimal result = MyCalculator.divide(10, 2);       
+    Decimal result = MyCalculator.divide(10, 2);
 
     // We check the result
     System.assertEquals(5, result);
