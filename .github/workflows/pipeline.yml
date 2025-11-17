@@ -1193,14 +1193,37 @@ jobs:
           COVERAGE_DATA=$(sf data query \
             --query "SELECT ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered FROM ApexCodeCoverage WHERE ApexClassOrTrigger.NamespacePrefix = null" \
             --target-org QAOrg \
-            --json)
+            --json 2>&1) || {
+            echo "⚠️  Warning: Could not query ApexCodeCoverage (may be empty or inaccessible)"
+            echo "Using aggregate coverage instead..."
+            COVERAGE_DATA='{"result":{"records":[]}}'
+          }
+
+          # Check if we got any coverage records
+          COVERAGE_RECORD_COUNT=$(echo "$COVERAGE_DATA" | jq -r '.result.records | length' 2>/dev/null || echo "0")
+
+          if [ "$COVERAGE_RECORD_COUNT" -eq 0 ]; then
+            echo "⚠️  No coverage records found in ApexCodeCoverage"
+            echo "Attempting to get aggregate coverage from ApexCodeCoverageAggregate..."
+            
+            # Try aggregate coverage table instead
+            COVERAGE_DATA=$(sf data query \
+              --query "SELECT ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered FROM ApexCodeCoverageAggregate WHERE ApexClassOrTrigger.NamespacePrefix = null" \
+              --target-org QAOrg \
+              --json 2>&1) || {
+              echo "⚠️  Could not query ApexCodeCoverageAggregate either"
+              echo "This likely means no tests have been run in this org yet"
+              echo "All existing classes will be marked as 0% coverage"
+              COVERAGE_DATA='{"result":{"records":[]}}'
+            }
+          fi
 
           # Process coverage data and match with all classes
           echo "Processing coverage data..."
-          
+
           # Create a temporary file to build coverage JSON
           > /tmp/existing_classes.json
-          
+
           while IFS= read -r class_name; do
             # Get coverage for this specific class
             COVERAGE_INFO=$(echo "$COVERAGE_DATA" | jq -r --arg name "$class_name" '
@@ -1439,12 +1462,12 @@ jobs:
           echo "----------------------------"
           echo "Existing Classes (unchanged) - Top 10:"
           echo "$EXISTING_ONLY" | jq -r 'sort_by(-.percent) | .[0:10] | .[] | "  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
-          
+
           if [ "$EXISTING_ONLY_COUNT" -gt 10 ]; then
             echo "  ... and $((EXISTING_ONLY_COUNT - 10)) more"
           fi
           echo ""
-          
+
           echo "New/Changed Classes:"
           cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
           echo ""
