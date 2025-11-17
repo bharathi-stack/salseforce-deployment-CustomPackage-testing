@@ -1140,40 +1140,6 @@ jobs:
           org_url=$(sf org display --target-org QAOrg --json | jq -r .result.instanceUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      # --- PREREQUISITE: Get all existing class coverage ---
-      - name: Store Existing Classes Coverage
-        id: store_existing_coverage
-        run: |
-          echo "======================================================"
-          echo "Storing Existing Classes Coverage Data"
-          echo "======================================================"
-          echo "Fetching existing Apex classes coverage from QA org..."
-          TEST_RESULT=$(sf apex run test \
-            --target-org QAOrg \
-            --code-coverage \
-            --result-format json \
-            --wait 30 \
-            --json) || true
-
-          # Check for test run failure
-          STATUS=$(echo $TEST_RESULT | jq -r .status)
-          if [ "$STATUS" != "0" ]; then
-            echo "❌ ERROR: The 'sf apex run test' command to get existing coverage failed."
-            echo "Response: $TEST_RESULT"
-            exit 1
-          fi
-
-          # *** FIX: Save as a JSON stream, not an array ***
-          echo $TEST_RESULT | jq -r '
-            .result.coverage.coverage[]? 
-            | select(.name != null and .type == "Class") 
-            | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-          ' > /tmp/existing_classes.json 2>/dev/null || echo '' > /tmp/existing_classes.json
-
-          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq -s 'length' 2>/dev/null || echo "0")
-          echo "📦 Stored coverage data for $EXISTING_COUNT existing classes"
-          echo ""
-
       # --- FIND CHANGES STEP ---
       - name: Find changed metadata files
         id: find_files
@@ -1195,6 +1161,61 @@ jobs:
             echo "ℹ️  No Salesforce metadata changes detected. Skipping."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
+
+      # --- NEW STEP: Capture Existing Org Coverage BEFORE Validation ---
+      - name: Store Existing Classes Coverage
+        id: store_existing_coverage
+        if: steps.find_files.outputs.delta_exists == 'true'
+        run: |
+          echo "======================================================"
+          echo "Capturing Existing Org Coverage (Before Deployment)"
+          echo "======================================================"
+
+          # Run apex tests to get current org coverage
+          echo "⏳ Running existing org tests to capture baseline coverage..."
+          EXISTING_TEST_JSON=$(sf apex run test \
+            --test-level RunLocalTests \
+            --target-org QAOrg \
+            --code-coverage \
+            --result-format json \
+            --wait 20 \
+            --json) || true
+
+          echo "Existing test response received"
+
+          # Extract coverage for all existing classes
+          EXISTING_CLASSES_COVERAGE=$(echo $EXISTING_TEST_JSON | jq -r '
+            .result.coverage.coverage[]?
+            | select(.name != null and .type == "Class")
+            | {
+                name: .name,
+                percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end),
+                lines: .numLocations,
+                coveredLines: (.numLocations - .numLocationsNotCovered)
+              }
+          ' 2>/dev/null)
+
+          if [ -z "$EXISTING_CLASSES_COVERAGE" ]; then
+            echo "ℹ️  No existing Apex classes found in org"
+            echo '' > /tmp/existing_classes.json
+          else
+            echo "$EXISTING_CLASSES_COVERAGE" > /tmp/existing_classes.json
+            
+            # Display existing coverage summary
+            EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq -s 'length' 2>/dev/null || echo "0")
+            EXISTING_AVG=$(cat /tmp/existing_classes.json | jq -s '
+              if length > 0 then ([.[].percent] | add / length) else 0 end
+            ' 2>/dev/null || echo "0")
+            
+            echo "📊 Existing Org Coverage Summary:"
+            echo "  Total Classes: $EXISTING_COUNT"
+            echo "  Average Coverage: ${EXISTING_AVG}%"
+            echo ""
+            echo "Top 10 Existing Classes by Coverage:"
+            cat /tmp/existing_classes.json | jq -s 'sort_by(-.percent) | .[0:10]' | \
+              jq -r '.[] | "  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"'
+          fi
+          echo "======================================================"
 
       # --- STAGE 1: Validate Delta & Check Changed Class Coverage (75%) ---
       - name: Validate Delta and Check Changed Class Coverage (75%)
@@ -1236,9 +1257,9 @@ jobs:
             $TEST_LEVEL_ARGS \
             --target-org QAOrg \
             --wait 20 \
-            --json) || true # allow script to continue to parse JSON even on failure
+            --json) || true
 
-          echo "Validation response: $VALIDATE_JSON"
+          echo "Validation response received"
 
           # 4. Check validation status
           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
@@ -1247,38 +1268,43 @@ jobs:
             exit 1
           fi
 
+          # Store validation ID for quick deploy
+          VALIDATION_ID=$(echo $VALIDATE_JSON | jq -r '.result.id')
+          echo "validation_id=$VALIDATION_ID" >> $GITHUB_OUTPUT
+
           echo "✅ Validation successful."
           echo "======================================================"
           echo "Analyzing Coverage for Changed Files"
           echo "======================================================"
 
-          # 5. Extract coverage for changed classes from the report
+          # 5. Extract coverage for changed classes from the validation report
           CHANGED_CLASSES_COVERAGE_JSON=$(echo $VALIDATE_JSON | jq -r '
             .result.details.runTestResult.codeCoverage[]?
             | select(.name != null and .type == "Class")
-            | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
+            | {
+                name: .name,
+                percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end),
+                lines: .numLocations,
+                coveredLines: (.numLocations - .numLocationsNotCovered)
+              }
           ' 2>/dev/null)
 
           if [ -z "$CHANGED_CLASSES_COVERAGE_JSON" ]; then
             echo "ℹ️  No Apex class changes detected in this validation report."
             echo "validation_coverage=100" >> $GITHUB_OUTPUT
-            # *** FIX: Create empty file, not an empty array ***
             echo '' > /tmp/new_classes.json
           else
-            # *** FIX: Save as a JSON stream, not an array ***
+            # Save as JSON stream (one object per line)
             echo "$CHANGED_CLASSES_COVERAGE_JSON" > /tmp/new_classes.json
 
             # Display coverage
             echo "Coverage for changed classes:"
-            echo "$CHANGED_CLASSES_COVERAGE_JSON" | jq -r '"  • \(.name): \(.percent | floor)% (\(.lines) lines)"'
+            cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"'
             echo ""
 
-            # 6. Calculate average coverage for *only* these changed classes
-            VALIDATION_COVERAGE=$(echo $VALIDATE_JSON | jq -r '
-              [.result.details.runTestResult.codeCoverage[]?
-              | select(.name != null and .type == "Class")
-              | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end]
-              | if length > 0 then (add / length) else 100 end
+            # 6. Calculate average coverage for changed classes only
+            VALIDATION_COVERAGE=$(cat /tmp/new_classes.json | jq -s '
+              if length > 0 then ([.[].percent] | add / length) else 100 end
             ' 2>/dev/null || echo "0")
 
             echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
@@ -1293,7 +1319,6 @@ jobs:
           fi
 
       # --- STAGE 2: Check Combined Org Coverage (95%) ---
-      # *** This step now uses the exact logic you provided ***
       - name: Check Combined Org Coverage (95%)
         id: check_combined_coverage
         if: steps.validate_delta.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
@@ -1317,7 +1342,6 @@ jobs:
           fi
 
           # Get list of new/changed class names
-          # This logic correctly reads the stream file
           NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' 2>/dev/null | sort | uniq)
 
           echo "New/Changed Classes Detected:"
@@ -1330,7 +1354,6 @@ jobs:
           echo ""
 
           # Filter existing classes to exclude new/changed ones (to avoid double counting)
-          # This logic correctly slurps (-s) the stream file, then processes
           EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
             [.[] | select(.name != null and ($new_names | contains(.name) | not))]
           ' 2>/dev/null || echo '[]')
@@ -1339,7 +1362,6 @@ jobs:
           EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
           EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
 
-          # This logic correctly slurps (-s) the stream file, then processes
           NEW_COUNT=$(cat /tmp/new_classes.json | jq -s 'length' 2>/dev/null || echo "0")
           NEW_SUM=$(cat /tmp/new_classes.json | jq -s '[.[].percent] | add // 0' 2>/dev/null || echo "0")
 
@@ -1351,28 +1373,33 @@ jobs:
             COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc 2>/dev/null || echo "0")
           else
             echo "ℹ️ No classes found for coverage calculation. Skipping check."
-            COMBINED_COVERAGE=100 # Set to 100 to pass
+            COMBINED_COVERAGE=100
           fi
 
           echo "📊 Coverage Calculation Details:"
           echo "--------------------------------"
           echo "Existing (Unchanged) Classes:   $EXISTING_ONLY_COUNT"
           echo "New/Changed Classes:            $NEW_COUNT"
-          echo "Total Classes:                $TOTAL_CLASSES classes"
-          echo "Total Coverage Sum:           ${TOTAL_SUM}%"
-          echo "Combined Average Coverage:    ${COMBINED_COVERAGE}%"
+          echo "Total Classes:                  $TOTAL_CLASSES classes"
+          echo "Total Coverage Sum:             ${TOTAL_SUM}%"
+          echo "Combined Average Coverage:      ${COMBINED_COVERAGE}%"
+          echo "Required Threshold:             95%"
           echo "--------------------------------"
           echo ""
 
           # Display all classes with their coverage
           echo "Detailed Per-Class Coverage:"
           echo "----------------------------"
-          echo "Existing Classes (unchanged):"
-          echo "$EXISTING_ONLY" | jq -r '.[] | "    • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          echo "Existing Classes (unchanged) - Top 10:"
+          echo "$EXISTING_ONLY" | jq -r 'sort_by(-.percent) | .[0:10] | .[] | "  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
+
+          if [ "$EXISTING_ONLY_COUNT" -gt 10 ]; then
+            echo "  ... and $((EXISTING_ONLY_COUNT - 10)) more"
+          fi
           echo ""
+
           echo "New/Changed Classes:"
-          # This logic correctly reads the stream
-          cat /tmp/new_classes.json | jq -r '"    • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          cat /tmp/new_classes.json | jq -r '"  • \(.name): \(.percent | floor)% (\(.coveredLines)/\(.lines) lines)"' 2>/dev/null || echo "  None"
           echo ""
 
           if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
@@ -1385,12 +1412,34 @@ jobs:
             echo "❌ ERROR: Combined average coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold."
             echo "❌ The new deployment would bring overall org coverage below 95%"
             echo ""
+            echo "💡 Recommendations:"
+            echo "  1. Improve test coverage for new/changed classes"
+            echo "  2. Add tests for existing classes with low coverage"
+            echo "  3. Review classes with 0% coverage"
+            echo ""
             echo "⚠️  VALIDATION BLOCKED - Please improve test coverage."
             exit 1
           fi
 
           echo "✅ Combined coverage meets the 95% requirement."
-          echo "✅ Validation successful."
+          echo "✅ Validation successful - Ready for deployment."
+          echo ""
+          echo "combined_coverage=$COMBINED_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Deploy Delta to QA Org (Quick Deploy)
+        if: steps.validate_delta.outputs.validation_id && steps.check_combined_coverage.outcome == 'success'
+        run: |
+          echo "======================================================"
+          echo "Deploying to QA Org"
+          echo "======================================================"
+          echo "All validation checks passed. Proceeding with quick deploy."
+          echo ""
+          sf project deploy quick \
+            --job-id ${{ steps.validate_delta.outputs.validation_id }} \
+            --target-org QAOrg \
+            --verbose
+          echo ""
+          echo "✅ Deployment completed successfully!"
   # ========================================
   # 3. THIRD JOB: Validate & Deploy to Sandbox
   # ========================================
