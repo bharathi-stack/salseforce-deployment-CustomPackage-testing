@@ -135,8 +135,8 @@
 
 #           # Store existing classes coverage
 #           echo $TEST_RESULT | jq -r '
-#             .result.coverage.coverage[]? 
-#             | select(.name != null and .type == "Class") 
+#             .result.coverage.coverage[]?
+#             | select(.name != null and .type == "Class")
 #             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
 #           ' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
 
@@ -405,8 +405,8 @@
 
 #           # Extract and store existing classes data
 #           echo $TEST_RESULT | jq -r '
-#             .result.coverage.coverage[]? 
-#             | select(.name != null and .type == "Class") 
+#             .result.coverage.coverage[]?
+#             | select(.name != null and .type == "Class")
 #             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
 #           ' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
 
@@ -461,7 +461,7 @@
 #             --test-level RunLocalTests \
 #             --target-org SandboxOrg \
 #             --json) || true
-#           echo "result: $VALIDATE_JSON"  
+#           echo "result: $VALIDATE_JSON"
 #           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
 #           if [ "$STATUS" != "0" ]; then
 #             echo "❌ Validation failed! Response: $VALIDATE_JSON"
@@ -480,7 +480,7 @@
 #           sf project deploy report \
 #             --job-id ${{ steps.validate.outputs.job-id }} \
 #             --target-org SandboxOrg
-            
+
 #           echo "✅ Validation completed successfully."
 
 #       - name: Check Validation Test Coverage
@@ -502,8 +502,8 @@
 
 #           # Extract coverage for each changed Apex class
 #           CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-#             .result.details.runTestResult.codeCoverage[]? 
-#             | select(.name != null and .type == "Class") 
+#             .result.details.runTestResult.codeCoverage[]?
+#             | select(.name != null and .type == "Class")
 #             | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
 #           ' 2>/dev/null || echo "")
 
@@ -513,35 +513,35 @@
 #           else
 #             echo "$CHANGED_CLASSES_COVERAGE"
 #             echo ""
-            
+
 #             # Store new classes data for later comparison
 #             echo $DEPLOY_REPORT | jq -r '
-#               .result.details.runTestResult.codeCoverage[]? 
-#               | select(.name != null and .type == "Class") 
+#               .result.details.runTestResult.codeCoverage[]?
+#               | select(.name != null and .type == "Class")
 #               | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
 #             ' > /tmp/new_classes.json || true
-            
+
 #             # Calculate average coverage for changed classes
 #             VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-#               [.result.details.runTestResult.codeCoverage[]? 
-#               | select(.name != null and .type == "Class") 
-#               | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end] 
+#               [.result.details.runTestResult.codeCoverage[]?
+#               | select(.name != null and .type == "Class")
+#               | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end]
 #               | if length > 0 then (add / length) else 100 end
 #             ' 2>/dev/null || echo "0")
-            
+
 #             echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
 #             echo ""
-            
+
 #             if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
 #               echo "⚠️  Warning: Could not retrieve validation coverage, setting to 0"
 #               VALIDATION_COVERAGE=0
 #             fi
-            
+
 #             if (( $(echo "$VALIDATION_COVERAGE < 75" | bc -l) )); then
 #               echo "❌ ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is below the required 75% threshold"
 #               exit 1
 #             fi
-            
+
 #             echo "✅ Changed classes meet the 75% test coverage requirement"
 #             echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
 #           fi
@@ -754,8 +754,8 @@
 
 #           # Extract and store existing classes data
 #           echo $TEST_RESULT | jq -r '
-#             .result.coverage.coverage[]? 
-#             | select(.name != null and .type == "Class") 
+#             .result.coverage.coverage[]?
+#             | select(.name != null and .type == "Class")
 #             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
 #           ' > /tmp/existing_classes.json 2>/dev/null || echo '[]' > /tmp/existing_classes.json
 
@@ -810,7 +810,7 @@
 #             --test-level RunLocalTests \
 #             --target-org ProdOrg \
 #             --json) || true
-#           echo "result: $VALIDATE_JSON"  
+#           echo "result: $VALIDATE_JSON"
 #           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
 #           if [ "$STATUS" != "0" ]; then
 #             echo "❌ Validation failed! Response: $VALIDATE_JSON"
@@ -829,7 +829,7 @@
 #           sf project deploy report \
 #             --job-id ${{ steps.validate.outputs.job-id }} \
 #             --target-org ProdOrg
-            
+
 #           echo "✅ Validation completed successfully."
 
 #       - name: Check Validation Test Coverage
@@ -851,8 +851,8 @@
 
 #           # Extract coverage for each changed Apex class
 #           CHANGED_CLASSES_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-#             .result.details.runTestResult.codeCoverage[]? 
-#             | select(.name != null and .type == "Class") 
+#             .result.details.runTestResult.codeCoverage[]?
+#             | select(.name != null and .type == "Class")
 #             | "\(.name): \(if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations | floor) else 0 end)% (\(.numLocations - .numLocationsNotCovered)/\(.numLocations) lines covered)"
 #           ' 2>/dev/null || echo "")
 
@@ -862,35 +862,35 @@
 #           else
 #             echo "$CHANGED_CLASSES_COVERAGE"
 #             echo ""
-            
+
 #             # Store new classes data for later comparison
 #             echo $DEPLOY_REPORT | jq -r '
-#               .result.details.runTestResult.codeCoverage[]? 
-#               | select(.name != null and .type == "Class") 
+#               .result.details.runTestResult.codeCoverage[]?
+#               | select(.name != null and .type == "Class")
 #               | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
 #             ' > /tmp/new_classes.json || true
-            
+
 #             # Calculate average coverage for changed classes
 #             VALIDATION_COVERAGE=$(echo $DEPLOY_REPORT | jq -r '
-#               [.result.details.runTestResult.codeCoverage[]? 
-#               | select(.name != null and .type == "Class") 
-#               | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end] 
+#               [.result.details.runTestResult.codeCoverage[]?
+#               | select(.name != null and .type == "Class")
+#               | if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end]
 #               | if length > 0 then (add / length) else 100 end
 #             ' 2>/dev/null || echo "0")
-            
+
 #             echo "📈 Average Coverage for Changed Classes: ${VALIDATION_COVERAGE}%"
 #             echo ""
-            
+
 #             if [ -z "$VALIDATION_COVERAGE" ] || [ "$VALIDATION_COVERAGE" = "null" ]; then
 #               echo "⚠️  Warning: Could not retrieve validation coverage, setting to 0"
 #               VALIDATION_COVERAGE=0
 #             fi
-            
+
 #             if (( $(echo "$VALIDATION_COVERAGE < 75" | bc -l) )); then
 #               echo "❌ ERROR: Validation test coverage is ${VALIDATION_COVERAGE}%, which is below the required 75% threshold"
 #               exit 1
 #             fi
-            
+
 #             echo "✅ Changed classes meet the 75% test coverage requirement"
 #             echo "validation_coverage=$VALIDATION_COVERAGE" >> $GITHUB_OUTPUT
 #           fi
@@ -1025,10 +1025,6 @@
 #           echo ""
 #           echo "✅ Deployment completed successfully"
 #           echo "======================================================"
-
-
-
-
 
 name: Salesforce CI/CD Pipeline
 on:
@@ -1227,6 +1223,7 @@ jobs:
           echo "STEP 2: Validating Delta Changes"
           echo "======================================================"
 
+          # 1. Build the --source-dir arguments from all changed files
           SOURCE_ARGS=""
           while read -r file_path; do
             SOURCE_ARGS="$SOURCE_ARGS --source-dir $file_path"
@@ -1237,11 +1234,50 @@ jobs:
           echo "--------------------------------------"
           echo ""
 
+          # 2. Dynamically determine the test level
+
+          # Find all changed Apex classes (test or not)
+          grep '/classes/.*\.cls$' salesforce-changes.txt > changed-apex-files.txt || true
+
+          # Find all changed *test* classes.
+          # This regex looks for files in /classes/ that contain 'Test' and end in .cls
+          # It then extracts just the class name (e.g., OMathOperationsTest2)
+          # Finally, it joins them with a comma (e.g., Test1,Test2)
+          TEST_LIST=$(grep -E '/classes/.*Test.*\.cls$' salesforce-changes.txt | sed 's|.*/\(.*\)\.cls$|\1|' | paste -sd, -)
+
+          TEST_LEVEL_ARGS=""
+          if [ ! -s changed-apex-files.txt ]; then
+            # Case 1: NO Apex classes changed (e.g., only layouts, objects).
+            echo "ℹ️ No Apex classes found in changes. Setting test level to NoTestRun."
+            TEST_LEVEL_ARGS="--test-level NoTestRun"
+
+          elif [ -n "$TEST_LIST" ]; then
+            # Case 2: Changed Apex classes *include* test classes.
+            # This is your exact requirement.
+            echo "✅ Found changed test classes. Setting test level to RunSpecifiedTests."
+            echo "   Running tests: $TEST_LIST"
+            TEST_LEVEL_ARGS="--test-level RunSpecifiedTests --tests $TEST_LIST"
+            
+          else
+            # Case 3: Changed Apex classes, but *no test classes* were found.
+            # (e.g., you added a new class but forgot to add its test file to the commit).
+            # We must run local tests to get the coverage report for your *new* class,
+            # otherwise, your 'Check Validation Test Coverage' step will fail or be inaccurate.
+            echo "⚠️ Changed Apex classes, but no corresponding test classes found in the delta."
+            echo "   Falling back to RunLocalTests to ensure coverage for new/changed code."
+            TEST_LEVEL_ARGS="--test-level RunLocalTests"
+          fi
+
+          echo "--------------------------------------"
+          echo ""
+
+          # 3. Run the validation with the dynamic test level
           VALIDATE_JSON=$(sf project deploy validate \
             $SOURCE_ARGS \
-            --test-level RunLocalTests \
+            $TEST_LEVEL_ARGS \
             --target-org QAOrg \
             --json) || true
+            
           echo "result: $VALIDATE_JSON"  
           STATUS=$(echo $VALIDATE_JSON | jq -r .status)
           if [ "$STATUS" != "0" ]; then
@@ -1391,8 +1427,8 @@ jobs:
           echo "  Classes:                $NEW_COUNT classes"
           echo "  └─ Coverage Sum:            ${NEW_SUM}%"
           echo ""
-          echo "Total Classes:                $TOTAL_CLASSES classes"
-          echo "Total Coverage Sum:           ${TOTAL_SUM}%"
+          echo "Total Classes:              $TOTAL_CLASSES classes"
+          echo "Total Coverage Sum:         ${TOTAL_SUM}%"
           echo "Combined Average Coverage:    ${COMBINED_COVERAGE}%"
           echo ""
           echo "────────────────────────────────────────────────────"
@@ -1446,7 +1482,7 @@ jobs:
           echo "✅ All coverage validations passed:"
           echo "    • Initial QA org coverage:        ${{ steps.check_org_coverage.outputs.org_coverage }}% (required: ≥90%)"
           echo "    • Changed classes avg coverage:   ${{ steps.check_validation_coverage.outputs.validation_coverage }}% (required: ≥75%)"
-          echo "    • Combined coverage (final):      ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
+          echo "    • Combined coverage (final):        ${{ steps.check_combined_coverage.outputs.combined_coverage }}% (required: ≥95%)"
           echo ""
           echo "🚀 Deploying using Validation ID: ${{ steps.validate.outputs.job-id }}"
           echo ""
