@@ -20,7 +20,7 @@
 @isTest
 private class MyCalculatorTest {
   @isTest
-  static void test_divide_happy_path() {
+  static void testdividehappypath() {
     // This test covers the "happy path"
     Decimal result = MyCalculator.divide(10, 2);
 
