@@ -1163,14 +1163,14 @@ jobs:
             exit 1
           fi
 
-          # Extract and store existing classes data as a JSON array
+          # *** FIX: Save as a JSON stream, not an array ***
           echo $TEST_RESULT | jq -r '
             .result.coverage.coverage[]? 
             | select(.name != null and .type == "Class") 
             | {name: .name, percent: (if (.numLocations > 0) then ((.numLocations - .numLocationsNotCovered) * 100 / .numLocations) else 0 end), lines: .numLocations}
-          ' | jq -s '.' > /tmp/existing_classes.json # -s "slurps" the stream of objects into one array
+          ' > /tmp/existing_classes.json 2>/dev/null || echo '' > /tmp/existing_classes.json
 
-          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq 'length' 2>/dev/null || echo "0")
+          EXISTING_COUNT=$(cat /tmp/existing_classes.json | jq -s 'length' 2>/dev/null || echo "0")
           echo "📦 Stored coverage data for $EXISTING_COUNT existing classes"
           echo ""
 
@@ -1262,10 +1262,11 @@ jobs:
           if [ -z "$CHANGED_CLASSES_COVERAGE_JSON" ]; then
             echo "ℹ️  No Apex class changes detected in this validation report."
             echo "validation_coverage=100" >> $GITHUB_OUTPUT
-            echo '[]' > /tmp/new_classes.json # Create empty file for next step
+            # *** FIX: Create empty file, not an empty array ***
+            echo '' > /tmp/new_classes.json
           else
-            # Store data as a JSON array for Stage 2
-            echo "$CHANGED_CLASSES_COVERAGE_JSON" | jq -s '.' > /tmp/new_classes.json
+            # *** FIX: Save as a JSON stream, not an array ***
+            echo "$CHANGED_CLASSES_COVERAGE_JSON" > /tmp/new_classes.json
 
             # Display coverage
             echo "Coverage for changed classes:"
@@ -1292,52 +1293,60 @@ jobs:
           fi
 
       # --- STAGE 2: Check Combined Org Coverage (95%) ---
+      # *** This step now uses the exact logic you provided ***
       - name: Check Combined Org Coverage (95%)
         id: check_combined_coverage
         if: steps.validate_delta.outcome == 'success' && steps.find_files.outputs.delta_exists == 'true'
         run: |
           echo "======================================================"
-          echo "STAGE 2: Verifying Combined Org Coverage (95% Threshold)"
+          echo "STAGE 2: Verifying Combined Coverage (Existing + New)"
           echo "======================================================"
+          echo ""
 
-          # 1. Verify prerequisite files exist
+          # Verify existing classes data file exists
           if [ ! -f /tmp/existing_classes.json ]; then
-            echo "❌ Error: Could not find existing classes data from 'Store Existing Classes Coverage' step."
-            exit 1
-          fi
-          if [ ! -f /tmp/new_classes.json ]; then
-            echo "❌ Error: Could not find new classes data from 'Validate Delta' step."
+            echo "❌ Error: Could not find existing classes data"
+            echo "⚠️  This file should have been created in the 'Store Existing Classes Coverage' step"
             exit 1
           fi
 
-          # 2. Get list of new/changed class names
-          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.[].name' 2>/dev/null | sort | uniq)
+          # Create new classes file if it doesn't exist
+          if [ ! -f /tmp/new_classes.json ]; then
+            echo "⚠️  Warning: No new classes data found, assuming no Apex changes"
+            echo '' > /tmp/new_classes.json
+          fi
+
+          # Get list of new/changed class names
+          # This logic correctly reads the stream file
+          NEW_CLASS_NAMES=$(cat /tmp/new_classes.json | jq -r '.name' 2>/dev/null | sort | uniq)
+
+          echo "New/Changed Classes Detected:"
+          echo "-----------------------------"
           if [ -z "$NEW_CLASS_NAMES" ]; then
-            echo "New/Changed Classes: None"
+            echo "None"
           else
-            echo "New/Changed Classes:"
             echo "$NEW_CLASS_NAMES"
           fi
           echo ""
 
-          # 3. Filter existing classes to exclude new/changed ones (to avoid double counting)
-          # *** BUG FIX HERE: Removed the '-s' (slurp) flag ***
-          # The file is already a JSON array, no need to re-wrap it.
-          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq --arg new_names "$NEW_CLASS_NAMES" '
+          # Filter existing classes to exclude new/changed ones (to avoid double counting)
+          # This logic correctly slurps (-s) the stream file, then processes
+          EXISTING_ONLY=$(cat /tmp/existing_classes.json | jq -s --arg new_names "$NEW_CLASS_NAMES" '
             [.[] | select(.name != null and ($new_names | contains(.name) | not))]
           ' 2>/dev/null || echo '[]')
 
-          # 4. Get counts and sums
+          # Get counts and sums
           EXISTING_ONLY_COUNT=$(echo "$EXISTING_ONLY" | jq 'length' 2>/dev/null || echo "0")
           EXISTING_ONLY_SUM=$(echo "$EXISTING_ONLY" | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
 
-          NEW_COUNT=$(cat /tmp/new_classes.json | jq 'length' 2>/dev/null || echo "0")
-          NEW_SUM=$(cat /tmp/new_classes.json | jq '[.[].percent] | add // 0' 2>/dev/null || echo "0")
+          # This logic correctly slurps (-s) the stream file, then processes
+          NEW_COUNT=$(cat /tmp/new_classes.json | jq -s 'length' 2>/dev/null || echo "0")
+          NEW_SUM=$(cat /tmp/new_classes.json | jq -s '[.[].percent] | add // 0' 2>/dev/null || echo "0")
 
           TOTAL_CLASSES=$((EXISTING_ONLY_COUNT + NEW_COUNT))
           TOTAL_SUM=$(echo "scale=2; $EXISTING_ONLY_SUM + $NEW_SUM" | bc 2>/dev/null || echo "0")
 
-          # 5. Calculate combined coverage (as per your example)
+          # Calculate combined coverage
           if [ "$TOTAL_CLASSES" -gt 0 ]; then
             COMBINED_COVERAGE=$(echo "scale=2; $TOTAL_SUM / $TOTAL_CLASSES" | bc 2>/dev/null || echo "0")
           else
@@ -1345,7 +1354,7 @@ jobs:
             COMBINED_COVERAGE=100 # Set to 100 to pass
           fi
 
-          echo "📊 Combined Coverage Calculation:"
+          echo "📊 Coverage Calculation Details:"
           echo "--------------------------------"
           echo "Existing (Unchanged) Classes:   $EXISTING_ONLY_COUNT"
           echo "New/Changed Classes:            $NEW_COUNT"
@@ -1355,15 +1364,26 @@ jobs:
           echo "--------------------------------"
           echo ""
 
-          # 6. Check against 95% threshold
+          # Display all classes with their coverage
+          echo "Detailed Per-Class Coverage:"
+          echo "----------------------------"
+          echo "Existing Classes (unchanged):"
+          echo "$EXISTING_ONLY" | jq -r '.[] | "    • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          echo ""
+          echo "New/Changed Classes:"
+          # This logic correctly reads the stream
+          cat /tmp/new_classes.json | jq -r '"    • \(.name): \(.percent)%"' 2>/dev/null || echo "  None"
+          echo ""
+
+          if [ -z "$COMBINED_COVERAGE" ] || [ "$COMBINED_COVERAGE" = "null" ] || [ "$COMBINED_COVERAGE" = "0" ]; then
+            echo "❌ Error: Could not calculate combined coverage"
+            exit 1
+          fi
+
+          # Check against 95% threshold
           if (( $(echo "$COMBINED_COVERAGE < 95" | bc -l) )); then
             echo "❌ ERROR: Combined average coverage is ${COMBINED_COVERAGE}%, which is below the required 95% threshold."
-            echo ""
-            echo "Per-class breakdown:"
-            echo "--- Existing Classes (unchanged) ---"
-            echo "$EXISTING_ONLY" | jq -r '.[] | "    • \(.name): \(.percent)%"' 2>/dev/null || echo "    None"
-            echo "--- New/Changed Classes ---"
-            cat /tmp/new_classes.json | jq -r '.[] | "    • \(.name): \(.percent)%"' 2>/dev/null || echo "    None"
+            echo "❌ The new deployment would bring overall org coverage below 95%"
             echo ""
             echo "⚠️  VALIDATION BLOCKED - Please improve test coverage."
             exit 1
