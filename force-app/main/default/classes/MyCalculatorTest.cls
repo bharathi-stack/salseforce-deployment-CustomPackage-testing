@@ -14,28 +14,26 @@
 //   //   // This is why the coverage will not be 100%.
 // }
 
-
 // --------------------------------------
 
 // File: MyCalculatorTest.cls
 @isTest
 private class MyCalculatorTest {
+  @isTest
+  static void testDivide_HappyPath() {
+    // This test covers the "happy path"
+    Decimal result = MyCalculator.divide(10, 2);
 
-    @isTest
-    static void testDivide_HappyPath() {
-        // This test covers the "happy path"
-        Decimal result = MyCalculator.divide(10, 2);
+    // We check the result
+    System.assertEquals(5, result, 'The division result should be 5.');
+  }
 
-        // We check the result
-        System.assertEquals(5, result, 'The division result should be 5.');
-    }
+  @isTest
+  static void testDivide_ByZero() {
+    // This new test covers the "denominator == 0" branch
+    Decimal result = MyCalculator.divide(10, 0);
 
-    @isTest
-    static void testDivide_ByZero() {
-        // This new test covers the "denominator == 0" branch
-        Decimal result = MyCalculator.divide(10, 0);
-
-        // We check that the method correctly returns null
-        System.assertEquals(null, result, 'Dividing by zero should return null.');
-    }
+    // We check that the method correctly returns null
+    System.assertEquals(null, result, 'Dividing by zero should return null.');
+  }
 }
