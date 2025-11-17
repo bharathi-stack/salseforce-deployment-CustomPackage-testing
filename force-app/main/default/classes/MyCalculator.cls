@@ -1,4 +1,4 @@
-// File: MyCalculator.clsss
+// File: MyCalculator.cls
 public with sharing class MyCalculator {
   public static Decimal divide(Decimal numerator, Decimal denominator) {
     // This 'if' check is one branch
