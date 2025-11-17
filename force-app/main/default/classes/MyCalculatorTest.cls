@@ -41,7 +41,7 @@
 
 // ----------------------------------------------------------------------------------------------------------
 
-// File: MyCalculatorTest.cls (covers below 50%)
+// File: MyCalculatorTest.cls (covers, below 50%)
 @isTest
 private class MyCalculatorTest {
 

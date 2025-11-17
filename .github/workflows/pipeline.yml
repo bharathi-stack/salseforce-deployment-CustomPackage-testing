@@ -609,7 +609,7 @@ name: Salesforce CI/CD Pipeline
 on:
   push:
     branches:
-      - release
+      - dev-A
 
 jobs:
   # ========================================
