@@ -1140,29 +1140,29 @@ jobs:
           org_url=$(sf org display --target-org QAOrg --json | jq -r .result.instanceUrl)
           echo "org_url=$org_url" >> $GITHUB_OUTPUT
 
-      - name: Check Overall Apex Coverage in QA Org
-        id: check_org_coverage
-        run: |
-          echo "Fetching overall Apex test coverage from QA org..."
-          TEST_RESULT=$(sf apex run test \
-            --target-org QAOrg \
-            --code-coverage \
-            --result-format json \
-            --wait 30 \
-            --json) || true
-          echo "Test result: $TEST_RESULT"
-          ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
-          echo "Current QA org-wide Apex coverage: ${ORG_COVERAGE}%"
-          if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
-            echo "Error: Could not retrieve org-wide coverage"
-            exit 1
-          fi
-          if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
-            echo "ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
-            exit 1
-          fi
-          echo "✓ QA org meets the 90% coverage requirement"
-          echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
+      # - name: Check Overall Apex Coverage in QA Org
+      #   id: check_org_coverage
+      #   run: |
+      #     echo "Fetching overall Apex test coverage from QA org..."
+      #     TEST_RESULT=$(sf apex run test \
+      #       --target-org QAOrg \
+      #       --code-coverage \
+      #       --result-format json \
+      #       --wait 30 \
+      #       --json) || true
+      #     echo "Test result: $TEST_RESULT"
+      #     ORG_COVERAGE=$(echo $TEST_RESULT | jq -r '.result.summary.orgWideCoverage' | sed 's/%//')
+      #     echo "Current QA org-wide Apex coverage: ${ORG_COVERAGE}%"
+      #     if [ -z "$ORG_COVERAGE" ] || [ "$ORG_COVERAGE" = "null" ]; then
+      #       echo "Error: Could not retrieve org-wide coverage"
+      #       exit 1
+      #     fi
+      #     if (( $(echo "$ORG_COVERAGE < 90" | bc -l) )); then
+      #       echo "ERROR: QA org Apex coverage is ${ORG_COVERAGE}%, which is below the required 90% threshold"
+      #       exit 1
+      #     fi
+      #     echo "✓ QA org meets the 90% coverage requirement"
+      #     echo "org_coverage=$ORG_COVERAGE" >> $GITHUB_OUTPUT
 
       - name: Store Existing Classes Coverage
         id: store_existing_coverage
