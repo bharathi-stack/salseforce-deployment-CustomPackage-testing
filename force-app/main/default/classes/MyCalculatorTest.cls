@@ -16,7 +16,7 @@
 
 // --------------------------------------
 
-// File: MyCalculatorTest.cls (covers, only 100%)888
+// File: MyCalculatorTest.cls (covers, only 100%)818
 @isTest
 private class MyCalculatorTest {
   @isTest
