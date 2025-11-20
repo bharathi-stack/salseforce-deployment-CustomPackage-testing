@@ -1541,14 +1541,43 @@ jobs:
           echo "📦 Stored coverage data for $EXISTING_COUNT existing classes"
           echo ""
 
+      # - name: Find changed metadata files
+      #   id: find_files
+      #   run: |
+      #     git diff --name-only HEAD~1 HEAD > changed-files.txt
+      #     grep -E "(force-app/|force-app2/)" changed-files.txt > salesforce-changes.txt || true
+
+      #     echo "======================================================"
+      #     echo "Changed Files Detection"
+      #     echo "======================================================"
+      #     echo "--- All changed files ---"
+      #     cat changed-files.txt
+      #     echo "-------------------------"
+      #     echo "--- Salesforce changes ---"
+      #     cat salesforce-changes.txt
+      #     echo "--------------------------"
+
+      #     if [ -s salesforce-changes.txt ]; then
+      #       echo "✅ Salesforce changes detected."
+      #       echo "delta_exists=true" >> $GITHUB_OUTPUT
+      #     else
+      #       echo "ℹ️  No Salesforce metadata changes detected. Skipping deployment."
+      #       echo "delta_exists=false" >> $GITHUB_OUTPUT
+      #     fi
       - name: Find changed metadata files
         id: find_files
         run: |
-          git diff --name-only HEAD~1 HEAD > changed-files.txt
+          # Fetch the latest state of the remote branches to ensure comparison is accurate
+          git fetch origin main 
+
+          # COMPARE: Current Commit (HEAD) vs Production Branch (origin/main)
+          # Replace 'origin/main' with your actual production branch name if different
+          git diff --name-only origin/main HEAD > changed-files.txt
+          
           grep -E "(force-app/|force-app2/)" changed-files.txt > salesforce-changes.txt || true
 
           echo "======================================================"
-          echo "Changed Files Detection"
+          echo "Changed Files Detection (Cumulative)"
           echo "======================================================"
           echo "--- All changed files ---"
           cat changed-files.txt
@@ -1561,10 +1590,9 @@ jobs:
             echo "✅ Salesforce changes detected."
             echo "delta_exists=true" >> $GITHUB_OUTPUT
           else
-            echo "ℹ️  No Salesforce metadata changes detected. Skipping deployment."
+            echo "ℹ️ No Salesforce metadata changes detected. Skipping deployment."
             echo "delta_exists=false" >> $GITHUB_OUTPUT
           fi
-
       - name: Validate Delta against Sandbox Org
         id: validate
         if: steps.find_files.outputs.delta_exists == 'true'
